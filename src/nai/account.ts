@@ -21,6 +21,7 @@ function pickSafe(obj: unknown, keys: readonly string[]): Record<string, unknown
   return out;
 }
 
+/** Account GETs live on `image.novelai.net`; `api.novelai.net` returns 400. */
 export async function getSubscription(
   env: Env,
   auth: string,
@@ -29,7 +30,7 @@ export async function getSubscription(
   const data = await naiFetchJson(
     env,
     "/user/subscription",
-    { method: "GET", auth, host: "api", signal },
+    { method: "GET", auth, host: "image", signal },
     MAX_MODELS_RESPONSE_BYTES,
   );
   const picked = pickSafe(data, SUBSCRIPTION_KEYS);
@@ -63,7 +64,7 @@ export async function getUserInformation(
   const data = await naiFetchJson(
     env,
     "/user/information",
-    { method: "GET", auth, host: "api", signal },
+    { method: "GET", auth, host: "image", signal },
     MAX_MODELS_RESPONSE_BYTES,
   );
   return pickSafe(data, [
