@@ -5,6 +5,7 @@ import {
   type ClientInfo,
 } from "@cloudflare/workers-oauth-provider";
 import { parsePastedNaiToken } from "../auth";
+import { limitRequestBody } from "../body-limit";
 import type { Env } from "../env";
 import { HttpError, openaiError, unhandledToResponse } from "../errors";
 import { MAX_AUTHORIZE_BODY_BYTES } from "../limits";
@@ -13,7 +14,6 @@ import { enforceIpRateLimit } from "../ratelimit";
 import {
   clearCookie,
   cookieNames,
-  peekConsent,
   putConsent,
   readCookie,
   takeConsent,
@@ -21,6 +21,7 @@ import {
 } from "./consent";
 import { escapeHtml, htmlResponse } from "./html";
 import { grantedScopes, naiUserId } from "./props";
+import { isAllowedOAuthRedirect } from "./redirects";
 
 export async function handleAuthorize(
   request: Request,
@@ -28,12 +29,12 @@ export async function handleAuthorize(
   _ctx: ExecutionContext,
 ): Promise<Response> {
   try {
-    if (request.method === "GET") return await renderAuthorize(request, env);
-    if (request.method === "POST") {
-      await enforceIpRateLimit(env, request);
-      return await submitAuthorize(request, env);
+    if (request.method !== "GET" && request.method !== "POST") {
+      return htmlResponse(405, errorPage("Method not allowed"));
     }
-    return htmlResponse(405, errorPage("Method not allowed"));
+    await enforceIpRateLimit(env, request, env.OAUTH_AUTHORIZE_RATE_LIMIT);
+    if (request.method === "GET") return await renderAuthorize(request, env);
+    return await submitAuthorize(request, env);
   } catch (err) {
     if (err instanceof AuthorizationError) return authorizationErrorResponse(err);
     if (err instanceof CimdFetchError) {
@@ -49,6 +50,9 @@ async function renderAuthorize(request: Request, env: Env): Promise<Response> {
   const client = await provider.lookupClient(oauthReq.clientId);
   if (!client) {
     return htmlResponse(400, errorPage("Unknown OAuth client."));
+  }
+  if (!isAllowedOAuthRedirect(oauthReq.redirectUri)) {
+    return htmlResponse(400, errorPage(disallowedRedirectMessage));
   }
 
   const url = new URL(request.url);
@@ -68,25 +72,23 @@ async function renderAuthorize(request: Request, env: Env): Promise<Response> {
 }
 
 async function submitAuthorize(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url);
-  const length = Number(request.headers.get("content-length") || "0");
-  if (Number.isFinite(length) && length > MAX_AUTHORIZE_BODY_BYTES) {
-    throw openaiError(413, "Request body too large", {
-      type: "invalid_request_error",
-    });
-  }
-
+  const inbound = await limitRequestBody(request, MAX_AUTHORIZE_BODY_BYTES);
+  const url = new URL(inbound.url);
   const names = cookieNames(url);
-  const cookieHeader = request.headers.get("Cookie");
+  const cookieHeader = inbound.headers.get("Cookie");
   const consentId = readCookie(cookieHeader, names.consent);
   const csrfCookie = readCookie(cookieHeader, names.csrf);
   const clear = [clearCookie(names.consent, url), clearCookie(names.csrf, url)];
 
   if (!consentId || !csrfCookie) {
-    return htmlResponse(400, errorPage("Authorization session expired. Start again from ChatGPT."), clear);
+    return htmlResponse(
+      400,
+      errorPage("Authorization session expired. Start again from your MCP client."),
+      clear,
+    );
   }
 
-  const form = await request.formData();
+  const form = await inbound.formData();
   const csrfForm = formString(form, "csrf_token");
   const decision = formString(form, "decision");
 
@@ -108,10 +110,12 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
     return htmlResponse(400, errorPage("Invalid authorization session."), clear);
   }
 
-  const record = await peekConsent(env.OAUTH_KV, consentId);
+  const record = await takeConsent(env.OAUTH_KV, consentId);
   if (!record || !timingSafeEqual(record.csrf, csrfCookie)) {
-    await takeConsent(env.OAUTH_KV, consentId);
     return htmlResponse(400, errorPage("Invalid authorization session."), clear);
+  }
+  if (!isAllowedOAuthRedirect(record.request.redirectUri)) {
+    return htmlResponse(400, errorPage(disallowedRedirectMessage), clear);
   }
 
   const provider = requireProvider(env);
@@ -121,6 +125,7 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
   try {
     naiAuth = parsePastedNaiToken(formString(form, "nai_token"));
   } catch {
+    await putConsent(env.OAUTH_KV, consentId, record);
     return htmlResponse(
       400,
       consentPage({
@@ -133,8 +138,9 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
   }
 
   try {
-    await getSubscription(env, naiAuth, request.signal);
+    await getSubscription(env, naiAuth, inbound.signal);
   } catch (err) {
+    await putConsent(env.OAUTH_KV, consentId, record);
     const message = subscriptionErrorMessage(err);
     return htmlResponse(
       400,
@@ -147,17 +153,12 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
     );
   }
 
-  const consumed = await takeConsent(env.OAUTH_KV, consentId);
-  if (!consumed || !timingSafeEqual(consumed.csrf, csrfCookie)) {
-    return htmlResponse(400, errorPage("Invalid authorization session."), clear);
-  }
-
   const rawToken = naiAuth.slice("Bearer ".length);
   const { redirectTo } = await provider.completeAuthorization({
-    request: consumed.request,
+    request: record.request,
     userId: await naiUserId(rawToken),
     metadata: { clientName: client?.clientName ?? null },
-    scope: grantedScopes(consumed.request.scope),
+    scope: grantedScopes(record.request.scope),
     props: { naiAuth },
   });
 
@@ -193,8 +194,11 @@ function subscriptionErrorMessage(err: unknown): string {
   return "Could not verify the NovelAI token. Try again.";
 }
 
+const disallowedRedirectMessage =
+  "This redirect URI is not allowed for this server.";
+
 function authorizationErrorResponse(err: AuthorizationError): Response {
-  if (!err.redirectUri) {
+  if (!err.redirectUri || !isAllowedOAuthRedirect(err.redirectUri)) {
     return htmlResponse(400, errorPage(err.description));
   }
   const redirect = new URL(err.redirectUri);
@@ -206,6 +210,9 @@ function authorizationErrorResponse(err: AuthorizationError): Response {
 }
 
 function denyRedirect(oauthReq: AuthRequest, clear: string[]): Response {
+  if (!isAllowedOAuthRedirect(oauthReq.redirectUri)) {
+    return htmlResponse(400, errorPage(disallowedRedirectMessage), clear);
+  }
   const redirect = new URL(oauthReq.redirectUri);
   redirect.searchParams.set("error", "access_denied");
   if (oauthReq.state) redirect.searchParams.set("state", oauthReq.state);
@@ -221,7 +228,10 @@ function consentPage(opts: {
   csrf: string;
   error: string | null;
 }): string {
-  const name = escapeHtml(opts.client?.clientName?.trim() || "ChatGPT");
+  const rawName = opts.client?.clientName?.trim();
+  const name = escapeHtml(rawName || "an MCP client");
+  const clientId = escapeHtml(opts.oauthReq.clientId);
+  const redirectUri = escapeHtml(opts.oauthReq.redirectUri);
   const scopes = escapeHtml(
     grantedScopes(opts.oauthReq.scope).join(", ") || "mcp",
   );
@@ -243,6 +253,10 @@ function consentPage(opts: {
     input[type=password] { width: 100%; box-sizing: border-box; padding: 0.55rem 0.7rem; border-radius: 8px; border: 1px solid #8888; }
     .hint { color: #666; font-size: 0.9rem; }
     .error { color: #b00020; background: #b0002012; padding: 0.7rem 0.85rem; border-radius: 8px; }
+    .meta { margin: 0.85rem 0; padding: 0.7rem 0.85rem; background: #8882; border-radius: 8px; font-size: 0.85rem; }
+    .meta dt { font-weight: 600; margin-top: 0.45rem; }
+    .meta dt:first-child { margin-top: 0; }
+    .meta dd { margin: 0.15rem 0 0; overflow-wrap: anywhere; }
     .actions { display: flex; gap: 0.75rem; margin-top: 1.25rem; }
     button { padding: 0.55rem 1rem; border-radius: 8px; border: 0; cursor: pointer; font-size: 1rem; }
     .approve { background: #1f6feb; color: #fff; flex: 1; }
@@ -253,7 +267,13 @@ function consentPage(opts: {
   <div class="card">
     <h1>Connect NovelAI to ${name}</h1>
     <p>${name} is requesting access to this NovelAI MCP server.</p>
-    <p class="hint">Scopes: ${scopes}. Your Persistent API token is stored encrypted with this grant and is used only to call NovelAI on your behalf. Do not send your NovelAI email or password.</p>
+    <dl class="meta">
+      <dt>Client ID</dt>
+      <dd><code>${clientId}</code></dd>
+      <dt>Redirect URI</dt>
+      <dd><code>${redirectUri}</code></dd>
+    </dl>
+    <p class="hint">Confirm this is the client and callback you expect before pasting a token. Scopes: ${scopes}. Your Persistent API token is stored encrypted with this grant and is used only to call NovelAI on your behalf. Do not send your NovelAI email or password.</p>
     ${error}
     <form method="post" action="/authorize" autocomplete="off">
       <input type="hidden" name="csrf_token" value="${escapeHtml(opts.csrf)}">

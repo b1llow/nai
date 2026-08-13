@@ -4,6 +4,8 @@
 interface __BaseEnv_Env {
 	OAUTH_KV: KVNamespace;
 	API_RATE_LIMIT: RateLimit;
+	OAUTH_AUTHORIZE_RATE_LIMIT: RateLimit;
+	OAUTH_REGISTER_RATE_LIMIT: RateLimit;
 	NAI_BASE_URL: string;
 	NAI_IMAGE_BASE_URL: string;
 	NAI_API_BASE_URL: string;

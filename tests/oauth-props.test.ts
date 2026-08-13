@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { MCP_RESOURCE } from "../src/limits";
 import {
   grantedScopes,
+  isInternalOAuthAccessToken,
   naiAuthFromProps,
   naiUserId,
+  resolveMcpToolAuth,
   resolveNaiBearer,
 } from "../src/oauth/props";
 import { testEnv } from "./helpers";
+
+const LIBRARY_ACCESS_TOKEN = `nai-${"ab".repeat(32)}:grantid:secretsecret`;
 
 describe("grantedScopes", () => {
   it("always includes mcp and keeps advertised extras", () => {
@@ -31,19 +36,65 @@ describe("naiAuthFromProps", () => {
   });
 });
 
+describe("resolveMcpToolAuth", () => {
+  it("does not fall back to the inbound header when OAuth props are present", () => {
+    expect(
+      resolveMcpToolAuth(
+        { naiAuth: "Bearer x" },
+        "Bearer header-token-xx",
+      ),
+    ).toBeNull();
+    expect(
+      resolveMcpToolAuth(
+        { naiAuth: "Bearer abcdefghijklmnop" },
+        "Bearer header-token-xx",
+      ),
+    ).toBe("Bearer abcdefghijklmnop");
+  });
+
+  it("uses the inbound header when OAuth props were never set", () => {
+    expect(resolveMcpToolAuth({}, "Bearer header-token-xx")).toBe(
+      "Bearer header-token-xx",
+    );
+    expect(resolveMcpToolAuth(undefined, "Bearer header-token-xx")).toBe(
+      "Bearer header-token-xx",
+    );
+  });
+});
+
+describe("isInternalOAuthAccessToken", () => {
+  it("detects this Worker's opaque access tokens", () => {
+    expect(isInternalOAuthAccessToken(LIBRARY_ACCESS_TOKEN)).toBe(true);
+    expect(isInternalOAuthAccessToken("header-token-xx")).toBe(false);
+    expect(isInternalOAuthAccessToken("abc:def:ghi-token")).toBe(false);
+  });
+});
+
 describe("resolveNaiBearer", () => {
-  it("accepts a format-valid NovelAI token", async () => {
+  it("accepts a format-valid NovelAI token for the pinned MCP resource", async () => {
     const out = await resolveNaiBearer({
       token: "header-token-xx",
       request: new Request("https://nai.hoshinoaya.com/mcp"),
       env: testEnv(),
     });
-    expect(out).toEqual({ props: { naiAuth: "Bearer header-token-xx" } });
+    expect(out).toEqual({
+      props: { naiAuth: "Bearer header-token-xx" },
+      audience: MCP_RESOURCE,
+    });
   });
 
   it("rejects a short token so OAuthProvider can 401", async () => {
     const out = await resolveNaiBearer({
       token: "x",
+      request: new Request("https://nai.hoshinoaya.com/mcp"),
+      env: testEnv(),
+    });
+    expect(out).toBeNull();
+  });
+
+  it("rejects an expired-looking library access token", async () => {
+    const out = await resolveNaiBearer({
+      token: LIBRARY_ACCESS_TOKEN,
       request: new Request("https://nai.hoshinoaya.com/mcp"),
       env: testEnv(),
     });

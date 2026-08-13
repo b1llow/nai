@@ -18,6 +18,22 @@
         "limit": 120,
         "period": 60
       }
+    },
+    {
+      "name": "OAUTH_AUTHORIZE_RATE_LIMIT",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "OAUTH_REGISTER_RATE_LIMIT",
+      "namespace_id": "1003",
+      "simple": {
+        "limit": 8,
+        "period": 60
+      }
     }
   ],
   "observability": {

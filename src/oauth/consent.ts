@@ -65,13 +65,6 @@ export async function takeConsent(
   return parseConsentRecord(raw);
 }
 
-export async function peekConsent(
-  kv: KVNamespace,
-  consentId: string,
-): Promise<ConsentRecord | null> {
-  return parseConsentRecord(await kv.get(`${KV_PREFIX}${consentId}`, "json"));
-}
-
 function parseConsentRecord(raw: unknown): ConsentRecord | null {
   if (!raw || typeof raw !== "object") return null;
   const rec = raw as { request?: AuthRequest; csrf?: unknown };

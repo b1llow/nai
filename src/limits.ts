@@ -36,6 +36,9 @@ export const MAX_CHARACTER_PROMPTS = 6;
 export const MAX_VOICE_TEXT_CHARS = 1_000;
 export const MAX_NATIVE_TEXT_CHARS = 100_000;
 export const MCP_CUSTOM_DOMAIN = "nai.hoshinoaya.com";
+export const MCP_PATH = "/mcp";
+export const MCP_RESOURCE = `https://${MCP_CUSTOM_DOMAIN}${MCP_PATH}`;
+export const MCP_ISSUER = `https://${MCP_CUSTOM_DOMAIN}`;
 
 export type NaiHostKind = "text" | "image" | "api";
 
