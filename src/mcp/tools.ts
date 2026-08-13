@@ -16,15 +16,27 @@ import {
   EMOTIONS,
   IMAGE_MODELS,
   NOISE_SCHEDULES,
+  RESOLUTION_PRESET_IDS,
   RESOLUTION_PRESETS,
   SAMPLERS,
   UC_PRESETS,
+  resolutionPresetDescribe,
 } from "../nai/catalog";
 import { encodeVibe, generateImage, suggestTags } from "../nai/image";
 import { decodeUserImage } from "../nai/image-input";
 import { generateNativeText } from "../nai/text";
 import { generateVoice } from "../nai/voice";
 import { mcpJson, mcpText, runTool, withImages } from "./result";
+
+const pixelDim = z
+  .number()
+  .int()
+  .multipleOf(64)
+  .min(64)
+  .max(1920)
+  .describe(
+    "Pixels, multiple of 64, 64–1920. Pair with the other dimension. If set, overrides resolution. Do not put size in the resolution field.",
+  );
 
 const characterPromptSchema = z.object({
   prompt: z.string(),
@@ -52,6 +64,90 @@ const chatMessageSchema = z.object({
   content: z.string(),
 });
 
+export const naiGenerateImageInputSchema = z.object({
+  prompt: z.string(),
+  model: z.string().optional(),
+  action: z.enum(["generate", "img2img", "infill"]).optional(),
+  resolution: z.enum(RESOLUTION_PRESET_IDS).optional().describe(resolutionPresetDescribe()),
+  width: pixelDim.optional(),
+  height: pixelDim.optional(),
+  negative_prompt: z.string().optional(),
+  qualityToggle: z.boolean().optional(),
+  ucPreset: z.number().int().min(0).max(3).optional(),
+  sampler: z.enum(SAMPLERS).optional(),
+  steps: z.number().int().optional(),
+  scale: z.number().optional(),
+  seed: z.number().int().optional(),
+  n_samples: z.number().int().min(1).max(4).optional(),
+  noise_schedule: z.enum(NOISE_SCHEDULES).optional(),
+  character_prompts: z.array(characterPromptSchema).optional(),
+  image: z.string().optional().describe("Source PNG base64 for img2img/infill"),
+  mask: z.string().optional().describe("Inpaint mask PNG base64 (white = edit)"),
+  strength: z.number().min(0).max(1).optional(),
+  noise: z.number().min(0).max(1).optional(),
+  add_original_image: z.boolean().optional(),
+  variety_boost: z.boolean().optional(),
+  skip_cfg_above_sigma: z.number().optional(),
+  reference_images: z.array(referenceImageSchema).optional(),
+  director_references: z.array(directorReferenceSchema).optional(),
+  cfg_rescale: z.number().min(0).max(1).optional(),
+  dynamic_thresholding: z.boolean().optional(),
+  sm: z.boolean().optional(),
+  sm_dyn: z.boolean().optional(),
+});
+
+const imageMetaOutputSchema = z.object({
+  seed: z.number(),
+  model: z.string(),
+  action: z.string(),
+  width: z.number(),
+  height: z.number(),
+  files: z.array(z.string()),
+});
+
+const filesMetaOutputSchema = z.object({
+  files: z.array(z.string()),
+});
+
+const upscaleOutputSchema = filesMetaOutputSchema.extend({
+  scale: z.union([z.literal(2), z.literal(4)]),
+});
+
+const directorOutputSchema = filesMetaOutputSchema.extend({
+  req_type: z.string(),
+});
+
+const tagsOutputSchema = z.object({
+  tags: z.unknown(),
+});
+
+const vibeOutputSchema = z.object({
+  vibe: z.string(),
+  model: z.string(),
+  information_extracted: z.number(),
+});
+
+const textOutputSchema = z.object({
+  text: z.string(),
+});
+
+const tokenizeOutputSchema = z.looseObject({
+  token_count: z.number(),
+});
+
+const voiceOutputSchema = z.object({
+  voice: z.string(),
+  version: z.enum(["v1", "v2"]),
+  mimeType: z.string(),
+});
+
+const subscriptionOutputSchema = z.record(z.string(), z.unknown());
+
+const modelsOutputSchema = z.object({
+  kind: z.enum(["text", "image"]),
+  items: z.array(z.unknown()),
+});
+
 export function registerNaiTools(
   server: McpServer,
   env: Env,
@@ -62,38 +158,9 @@ export function registerNaiTools(
     {
       title: "Generate image",
       description:
-        "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns PNG images plus seed/model metadata.",
-      inputSchema: z.object({
-        prompt: z.string(),
-        model: z.string().optional(),
-        action: z.enum(["generate", "img2img", "infill"]).optional(),
-        resolution: z.string().optional(),
-        width: z.number().int().optional(),
-        height: z.number().int().optional(),
-        negative_prompt: z.string().optional(),
-        qualityToggle: z.boolean().optional(),
-        ucPreset: z.number().int().min(0).max(3).optional(),
-        sampler: z.string().optional(),
-        steps: z.number().int().optional(),
-        scale: z.number().optional(),
-        seed: z.number().int().optional(),
-        n_samples: z.number().int().min(1).max(4).optional(),
-        noise_schedule: z.string().optional(),
-        character_prompts: z.array(characterPromptSchema).optional(),
-        image: z.string().optional().describe("Source PNG base64 for img2img/infill"),
-        mask: z.string().optional().describe("Inpaint mask PNG base64 (white = edit)"),
-        strength: z.number().min(0).max(1).optional(),
-        noise: z.number().min(0).max(1).optional(),
-        add_original_image: z.boolean().optional(),
-        variety_boost: z.boolean().optional(),
-        skip_cfg_above_sigma: z.number().optional(),
-        reference_images: z.array(referenceImageSchema).optional(),
-        director_references: z.array(directorReferenceSchema).optional(),
-        cfg_rescale: z.number().min(0).max(1).optional(),
-        dynamic_thresholding: z.boolean().optional(),
-        sm: z.boolean().optional(),
-        sm_dyn: z.boolean().optional(),
-      }),
+        "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns PNG images plus seed/model metadata.",
+      inputSchema: naiGenerateImageInputSchema,
+      outputSchema: imageMetaOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
@@ -123,11 +190,18 @@ export function registerNaiTools(
         width: z.number().int().optional(),
         height: z.number().int().optional(),
       }),
+      outputSchema: upscaleOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
         const images = await upscaleImage(env, token, args);
-        return withImages({ scale: args.scale === 4 ? 4 : 2 }, images);
+        return withImages(
+          {
+            scale: args.scale === 4 ? 4 : 2,
+            files: images.map((i) => i.name),
+          },
+          images,
+        );
       }),
   );
 
@@ -147,11 +221,18 @@ export function registerNaiTools(
         emotion: z.enum(EMOTIONS).optional(),
         emotion_level: z.number().int().min(0).max(5).optional(),
       }),
+      outputSchema: directorOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
         const images = await runDirector(env, token, args);
-        return withImages({ req_type: args.req_type }, images);
+        return withImages(
+          {
+            req_type: args.req_type,
+            files: images.map((i) => i.name),
+          },
+          images,
+        );
       }),
   );
 
@@ -164,9 +245,12 @@ export function registerNaiTools(
         prompt: z.string(),
         model: z.string().optional(),
       }),
+      outputSchema: tagsOutputSchema,
     },
     async (args) =>
-      runTool(auth, async (token) => mcpJson(await suggestTags(env, token, args))),
+      runTool(auth, async (token) =>
+        mcpJson({ tags: await suggestTags(env, token, args) }),
+      ),
   );
 
   server.registerTool(
@@ -180,6 +264,7 @@ export function registerNaiTools(
         model: z.string().optional(),
         information_extracted: z.number().min(0.01).max(1).optional(),
       }),
+      outputSchema: vibeOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
@@ -212,6 +297,7 @@ export function registerNaiTools(
         max_tokens: z.number().int().optional(),
         enable_thinking: z.boolean().optional(),
       }),
+      outputSchema: textOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
@@ -232,10 +318,10 @@ export function registerNaiTools(
           stream: false,
         });
         if (result.kind !== "json") {
-          return mcpText("Unexpected streaming response");
+          return { ...mcpText("Unexpected streaming response"), isError: true };
         }
         const text = result.completion.choices[0]?.message.content ?? "";
-        return mcpText(text);
+        return mcpJson({ text });
       }),
   );
 
@@ -259,11 +345,12 @@ export function registerNaiTools(
         generate_until_sentence: z.boolean().optional(),
         seed: z.number().int().optional(),
       }),
+      outputSchema: textOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
         const result = await generateNativeText(env, token, args);
-        return mcpText(result.text);
+        return mcpJson({ text: result.text });
       }),
   );
 
@@ -277,6 +364,7 @@ export function registerNaiTools(
         prompt: z.string().optional(),
         messages: z.array(chatMessageSchema).optional(),
       }),
+      outputSchema: tokenizeOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) =>
@@ -302,15 +390,24 @@ export function registerNaiTools(
         version: z.enum(["v1", "v2"]).optional(),
         opus: z.boolean().optional(),
       }),
+      outputSchema: voiceOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
         const audio = await generateVoice(env, token, args);
+        const voice = args.voice ?? "Aini";
+        const version = args.version ?? "v2";
+        const structuredContent = {
+          voice,
+          version,
+          mimeType: audio.mimeType,
+        };
         return {
           content: [
-            { type: "text", text: `voice=${args.voice ?? "Aini"} version=${args.version ?? "v2"}` },
+            { type: "text", text: JSON.stringify(structuredContent) },
             { type: "audio", data: audio.base64, mimeType: audio.mimeType },
           ],
+          structuredContent,
         };
       }),
   );
@@ -321,6 +418,7 @@ export function registerNaiTools(
       title: "Subscription",
       description: "NovelAI subscription tier and remaining Anlas/priority (safe fields only).",
       inputSchema: z.object({}),
+      outputSchema: subscriptionOutputSchema,
     },
     async () =>
       runTool(auth, async (token) => mcpJson(await getSubscription(env, token))),
@@ -335,14 +433,15 @@ export function registerNaiTools(
       inputSchema: z.object({
         kind: z.enum(["text", "image"]).optional(),
       }),
+      outputSchema: modelsOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
         if (args.kind === "image") {
-          return mcpJson(IMAGE_MODELS);
+          return mcpJson({ kind: "image" as const, items: IMAGE_MODELS });
         }
         const models = await fetchModels(env, token);
-        return mcpJson(models);
+        return mcpJson({ kind: "text" as const, items: models });
       }),
   );
 

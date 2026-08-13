@@ -120,6 +120,43 @@ describe("prepareGenerateImage", () => {
     ).toThrow(/image is required/);
   });
 
+  it("rejects unknown resolution presets such as 1024x1024 or portrait", () => {
+    expect(() =>
+      prepareGenerateImage({ prompt: "1girl", resolution: "1024x1024" }),
+    ).toThrow(/unknown resolution preset/);
+    expect(() =>
+      prepareGenerateImage({ prompt: "1girl", resolution: "portrait" }),
+    ).toThrow(/unknown resolution preset/);
+  });
+
+  it("rejects width without height", () => {
+    expect(() =>
+      prepareGenerateImage({ prompt: "1girl", width: 1024 }),
+    ).toThrow(/width and height must be numbers/);
+  });
+
+  it("uses a named preset for size", () => {
+    const prepared = prepareGenerateImage({
+      prompt: "1girl",
+      resolution: "normal_square",
+      seed: 1,
+    });
+    expect(prepared.width).toBe(1024);
+    expect(prepared.height).toBe(1024);
+  });
+
+  it("lets numeric width and height override the preset", () => {
+    const prepared = prepareGenerateImage({
+      prompt: "1girl",
+      resolution: "small_portrait",
+      width: 1024,
+      height: 1024,
+      seed: 1,
+    });
+    expect(prepared.width).toBe(1024);
+    expect(prepared.height).toBe(1024);
+  });
+
   it("rejects more than four director_references instead of truncating", () => {
     const refs = Array.from({ length: 5 }, () => ({
       image: PNG_1X1,
