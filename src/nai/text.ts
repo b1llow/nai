@@ -91,10 +91,22 @@ export async function generateNativeText(
       param: "model",
     });
   }
+  const maxLength = Math.trunc(
+    clamp(finiteNumber(input.max_length) ?? 100, 1, MAX_TOKENS),
+  );
+  const minLength = Math.trunc(
+    clamp(finiteNumber(input.min_length) ?? 1, 1, MAX_TOKENS),
+  );
+  if (minLength > maxLength) {
+    throw openaiError(400, "min_length cannot exceed max_length", {
+      type: "invalid_request_error",
+      param: "min_length",
+    });
+  }
   const parameters: Record<string, unknown> = {
     temperature: clamp(finiteNumber(input.temperature) ?? 1, 0, 2),
-    max_length: Math.trunc(clamp(finiteNumber(input.max_length) ?? 100, 1, MAX_TOKENS)),
-    min_length: Math.trunc(clamp(finiteNumber(input.min_length) ?? 1, 1, MAX_TOKENS)),
+    max_length: maxLength,
+    min_length: minLength,
     generate_until_sentence: input.generate_until_sentence !== false,
   };
   if (finiteNumber(input.top_p) !== undefined) parameters.top_p = clamp(input.top_p!, 0, 1);

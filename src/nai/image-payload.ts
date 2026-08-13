@@ -206,13 +206,11 @@ export function prepareGenerateImage(input: GenerateImageInput): PreparedGenerat
     height = clampDim(decodedSource.height);
   }
 
-  const characters = (input.character_prompts ?? []).slice(0, MAX_CHARACTER_PROMPTS);
-  if ((input.character_prompts?.length ?? 0) > MAX_CHARACTER_PROMPTS) {
-    throw openaiError(400, "too many character_prompts", {
-      type: "invalid_request_error",
-      param: "character_prompts",
-    });
-  }
+  const characters = requireAtMost(
+    input.character_prompts,
+    MAX_CHARACTER_PROMPTS,
+    "character_prompts",
+  );
   const charPayload = characters.map((c) => {
     if (typeof c.prompt !== "string" || !c.prompt.trim()) {
       throw openaiError(400, "character prompt is required", {
@@ -312,13 +310,11 @@ export function prepareGenerateImage(input: GenerateImageInput): PreparedGenerat
     parameters.mask = mask.base64;
   }
 
-  const refs = (input.reference_images ?? []).slice(0, MAX_REFERENCE_IMAGES);
-  if ((input.reference_images?.length ?? 0) > MAX_REFERENCE_IMAGES) {
-    throw openaiError(400, "too many reference_images", {
-      type: "invalid_request_error",
-      param: "reference_images",
-    });
-  }
+  const refs = requireAtMost(
+    input.reference_images,
+    MAX_REFERENCE_IMAGES,
+    "reference_images",
+  );
   const referenceImages: string[] = [];
   const referenceStrengths: number[] = [];
   const referenceExtracted: number[] = [];
@@ -350,9 +346,10 @@ export function prepareGenerateImage(input: GenerateImageInput): PreparedGenerat
     parameters.reference_information_extracted_multiple = referenceExtracted;
   }
 
-  const directorRefs = (input.director_references ?? []).slice(
-    0,
+  const directorRefs = requireAtMost(
+    input.director_references,
     MAX_REFERENCE_IMAGES,
+    "director_references",
   );
   if (directorRefs.length > 0) {
     parameters.director_reference_images = directorRefs.map((d) => {
@@ -397,6 +394,21 @@ export function prepareGenerateImage(input: GenerateImageInput): PreparedGenerat
     referenceStrengths,
     referenceExtracted,
   };
+}
+
+function requireAtMost<T>(
+  items: T[] | undefined,
+  max: number,
+  param: string,
+): T[] {
+  const list = items ?? [];
+  if (list.length > max) {
+    throw openaiError(400, `too many ${param}`, {
+      type: "invalid_request_error",
+      param,
+    });
+  }
+  return list;
 }
 
 function stripKeepB64(raw: string, param: string): string {

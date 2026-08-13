@@ -83,7 +83,7 @@ Cursor / Claude Desktop via `mcp-remote`:
 | `nai_tokenize` | `/oa/v1/internal/token-count` |
 | `nai_generate_voice` | `/ai/generate-voice` |
 | `nai_subscription` | `/user/subscription` |
-| `nai_list_models` | text: OA models; image: static catalog |
+| `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
 
 Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`.
 

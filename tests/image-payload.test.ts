@@ -119,4 +119,14 @@ describe("prepareGenerateImage", () => {
       prepareGenerateImage({ prompt: "x", action: "img2img" }),
     ).toThrow(/image is required/);
   });
+
+  it("rejects more than four director_references instead of truncating", () => {
+    const refs = Array.from({ length: 5 }, () => ({
+      image: PNG_1X1,
+      type: "character" as const,
+    }));
+    expect(() =>
+      prepareGenerateImage({ prompt: "1girl", director_references: refs }),
+    ).toThrow(/too many director_references/);
+  });
 });

@@ -2,7 +2,8 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import type { Env } from "../env";
 import { resolveMcpAuthorization } from "../auth";
-import { openaiError, unhandledToResponse } from "../errors";
+import { limitRequestBody } from "../body-limit";
+import { unhandledToResponse } from "../errors";
 import { MAX_MCP_BODY_BYTES, MCP_CUSTOM_DOMAIN } from "../limits";
 import { enforceIpRateLimit } from "../ratelimit";
 import { registerNaiTools } from "./tools";
@@ -42,12 +43,7 @@ export async function handleMcp(
   try {
     if (request.method !== "OPTIONS") {
       await enforceIpRateLimit(env, request);
-      const len = Number(request.headers.get("content-length"));
-      if (Number.isFinite(len) && len > MAX_MCP_BODY_BYTES) {
-        throw openaiError(413, "Request body too large", {
-          type: "invalid_request_error",
-        });
-      }
+      request = await limitRequestBody(request, MAX_MCP_BODY_BYTES);
     }
 
     const auth = resolveMcpAuthorization(

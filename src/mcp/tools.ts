@@ -330,14 +330,15 @@ export function registerNaiTools(
     "nai_list_models",
     {
       title: "List models",
-      description: "List text models from upstream (with fallback) or the static image model catalog.",
+      description:
+        "List models. Default kind is text (upstream /oa/v1/models, with static fallback). Pass kind=image for the static Diffusion catalog.",
       inputSchema: z.object({
         kind: z.enum(["text", "image"]).optional(),
       }),
     },
     async (args) =>
       runTool(auth, async (token) => {
-        if ((args.kind ?? "image") === "image") {
+        if (args.kind === "image") {
           return mcpJson(IMAGE_MODELS);
         }
         const models = await fetchModels(env, token);
