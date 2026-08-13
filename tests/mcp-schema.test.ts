@@ -94,11 +94,15 @@ describe("MCP tools/list schemas", () => {
       new URL("https://nai.hoshinoaya.com/mcp"),
       {
         requestInit: {
-          headers: { Authorization: "Bearer header-token-xx" },
+          headers: {
+            Authorization: "Bearer header-token-xx",
+            Host: "nai.hoshinoaya.com",
+          },
         },
         fetch: (input, init) => {
-          const request = new Request(input, init);
-          return handleMcp(request, env, ctx);
+          const headers = new Headers(init?.headers);
+          if (!headers.has("Host")) headers.set("Host", "nai.hoshinoaya.com");
+          return handleMcp(new Request(input, { ...init, headers }), env, ctx);
         },
       },
     );
