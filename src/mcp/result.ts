@@ -24,7 +24,7 @@ export function mcpNeedAuth(): McpToolResult {
     content: [
       {
         type: "text",
-        text: "Missing NovelAI Persistent API token. Pass Authorization: Bearer <token> on the MCP request, or set the NAI_ACCESS_TOKEN Worker secret.",
+        text: "Missing NovelAI Persistent API token. Pass Authorization: Bearer <token> on the MCP request (same as /v1).",
       },
     ],
     isError: true,

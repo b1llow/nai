@@ -27,12 +27,12 @@ function correlationId(): string {
   return out;
 }
 
-export async function readBytesCapped(
-  res: Response,
+export async function readStreamCapped(
+  body: ReadableStream<Uint8Array> | null | undefined,
   maxBytes: number,
 ): Promise<{ bytes: Uint8Array; truncated: boolean }> {
-  if (!res.body) return { bytes: new Uint8Array(0), truncated: false };
-  const reader = res.body.getReader();
+  if (!body) return { bytes: new Uint8Array(0), truncated: false };
+  const reader = body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
   let truncated = false;
@@ -79,6 +79,13 @@ export async function readBytesCapped(
     offset += c.byteLength;
   }
   return { bytes: merged, truncated };
+}
+
+export async function readBytesCapped(
+  res: Response,
+  maxBytes: number,
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  return readStreamCapped(res.body, maxBytes);
 }
 
 export async function readBodyCapped(

@@ -32,24 +32,14 @@ export function parseAuthorization(header: string | undefined): string {
 }
 
 /**
- * MCP auth: request Bearer header wins; otherwise the optional Worker secret.
- * A present but malformed header is rejected. A malformed secret is a
- * server misconfiguration (do not fall through).
+ * MCP auth: per-request Bearer only (same as `/v1`).
+ * A missing header means tools return `mcpNeedAuth`; a malformed header is 401.
+ * Do not fall back to a Worker secret — this Worker is publicly reachable.
  */
 export function resolveMcpAuthorization(
   header: string | undefined,
-  secret: string | undefined,
 ): string | null {
   const raw = (header ?? "").trim();
-  if (raw) return parseAuthorization(header);
-  const token = (secret ?? "").trim();
-  if (!token) return null;
-  try {
-    return parseAuthorization(`Bearer ${token}`);
-  } catch {
-    throw openaiError(500, "Server misconfigured", {
-      type: "api_error",
-      code: "internal_error",
-    });
-  }
+  if (!raw) return null;
+  return parseAuthorization(header);
 }
