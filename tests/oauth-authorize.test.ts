@@ -10,6 +10,8 @@ import { handleAuthorize } from "../src/oauth/authorize";
 import * as account from "../src/nai/account";
 import { testEnv, testExecutionContext } from "./helpers";
 
+const ORIGIN = "http://127.0.0.1:8787";
+
 const oauthReq: AuthRequest = {
   responseType: "code",
   clientId: "chatgpt-client",
@@ -36,17 +38,37 @@ function mockProvider(
   } as OAuthHelpers;
 }
 
-function cookiesFrom(res: Response): string {
-  const headers = res.headers as Headers & { getSetCookie?: () => string[] };
-  const setCookies = headers.getSetCookie?.() ?? [];
-  if (setCookies.length === 0) {
-    const single = res.headers.get("Set-Cookie");
-    if (single) setCookies.push(single);
-  }
-  return setCookies
-    .map((c) => c.split(";")[0]!.trim())
-    .filter(Boolean)
-    .join("; ");
+function fieldsFrom(html: string): { csrf: string; consentId: string } {
+  const csrf = /name="csrf_token" value="([^"]+)"/.exec(html)?.[1];
+  const consentId = /name="consent_id" value="([^"]+)"/.exec(html)?.[1];
+  expect(csrf).toBeTruthy();
+  expect(consentId).toBeTruthy();
+  return { csrf: csrf!, consentId: consentId! };
+}
+
+function approveBody(
+  consentId: string,
+  csrf: string,
+  extra: Record<string, string> = {},
+): URLSearchParams {
+  return new URLSearchParams({
+    consent_id: consentId,
+    csrf_token: csrf,
+    decision: "approve",
+    nai_token: "abcdefghijklmnop",
+    ...extra,
+  });
+}
+
+function postAuthorize(body: BodyInit): Request {
+  return new Request(`${ORIGIN}/authorize`, {
+    method: "POST",
+    headers: {
+      Origin: ORIGIN,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body,
+  });
 }
 
 async function startConsent(
@@ -59,15 +81,13 @@ async function startConsent(
     OAUTH_PROVIDER: mockProvider({ completeAuthorization: complete }),
   });
   const res = await handleAuthorize(
-    new Request("http://127.0.0.1:8787/authorize?client_id=chatgpt-client"),
+    new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
     env,
     testExecutionContext(),
   );
   expect(res.status).toBe(200);
   const html = await res.text();
-  const csrf = /name="csrf_token" value="([^"]+)"/.exec(html)?.[1];
-  expect(csrf).toBeTruthy();
-  return { env, cookies: cookiesFrom(res), csrf: csrf!, complete, html };
+  return { env, complete, html, ...fieldsFrom(html) };
 }
 
 describe("OAuth consent", () => {
@@ -77,6 +97,7 @@ describe("OAuth consent", () => {
     expect(html).toMatch(/ChatGPT/);
     expect(html).toMatch(/chatgpt-client/);
     expect(html).toMatch(/https:\/\/chatgpt\.com\/connector\/oauth\/callback/);
+    expect(html).toMatch(/name="consent_id"/);
     expect(html).not.toMatch(/<script/i);
   });
 
@@ -91,7 +112,7 @@ describe("OAuth consent", () => {
       }),
     });
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize?client_id=chatgpt-client"),
+      new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
       env,
       testExecutionContext(),
     );
@@ -113,7 +134,7 @@ describe("OAuth consent", () => {
       }),
     });
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize?client_id=chatgpt-client"),
+      new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
       env,
       testExecutionContext(),
     );
@@ -137,7 +158,7 @@ describe("OAuth consent", () => {
       }),
     });
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize?client_id=chatgpt-client"),
+      new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
       env,
       testExecutionContext(),
     );
@@ -157,7 +178,7 @@ describe("OAuth consent", () => {
       }),
     });
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize?client_id=chatgpt-client"),
+      new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
       env,
       testExecutionContext(),
     );
@@ -166,16 +187,32 @@ describe("OAuth consent", () => {
   });
 
   it("rejects a missing CSRF token without completing authorization", async () => {
-    const { env, cookies, complete } = await startConsent();
-    const body = new URLSearchParams({
-      decision: "approve",
-      nai_token: "abcdefghijklmnop",
-    });
+    const { env, consentId, complete } = await startConsent();
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
+      postAuthorize(
+        new URLSearchParams({
+          consent_id: consentId,
+          decision: "approve",
+          nai_token: "abcdefghijklmnop",
+        }),
+      ),
+      env,
+      testExecutionContext(),
+    );
+    expect(res.status).toBe(400);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("rejects a cross-origin POST", async () => {
+    const { env, consentId, csrf, complete } = await startConsent();
+    const res = await handleAuthorize(
+      new Request(`${ORIGIN}/authorize`, {
         method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body,
+        headers: {
+          Origin: "https://evil.example",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: approveBody(consentId, csrf),
       }),
       env,
       testExecutionContext(),
@@ -188,18 +225,9 @@ describe("OAuth consent", () => {
     const spy = vi
       .spyOn(account, "getSubscription")
       .mockRejectedValue(openaiError(401, "Invalid Authentication"));
-    const { env, cookies, csrf, complete } = await startConsent();
-    const body = new URLSearchParams({
-      decision: "approve",
-      csrf_token: csrf,
-      nai_token: "abcdefghijklmnop",
-    });
+    const { env, consentId, csrf, complete } = await startConsent();
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body,
-      }),
+      postAuthorize(approveBody(consentId, csrf)),
       env,
       testExecutionContext(),
     );
@@ -212,15 +240,7 @@ describe("OAuth consent", () => {
       tier: "opus",
     });
     const retry = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          decision: "approve",
-          csrf_token: csrf,
-          nai_token: "abcdefghijklmnop",
-        }),
-      }),
+      postAuthorize(approveBody(consentId, csrf)),
       env,
       testExecutionContext(),
     );
@@ -237,18 +257,9 @@ describe("OAuth consent", () => {
       expect(opts.props?.naiAuth).toBe("Bearer abcdefghijklmnop");
       return { redirectTo: "https://chatgpt.com/connector/oauth/callback?code=abc" };
     }) as unknown as OAuthHelpers["completeAuthorization"];
-    const { env, cookies, csrf } = await startConsent(complete);
-    const body = new URLSearchParams({
-      decision: "approve",
-      csrf_token: csrf,
-      nai_token: "abcdefghijklmnop",
-    });
+    const { env, consentId, csrf } = await startConsent(complete);
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body,
-      }),
+      postAuthorize(approveBody(consentId, csrf)),
       env,
       testExecutionContext(),
     );
@@ -258,18 +269,46 @@ describe("OAuth consent", () => {
     expect(complete).toHaveBeenCalledOnce();
   });
 
-  it("redirects deny with access_denied and does not complete", async () => {
-    const { env, cookies, csrf, complete } = await startConsent();
-    const body = new URLSearchParams({
-      decision: "deny",
-      csrf_token: csrf,
+  it("keeps two authorization flows independent", async () => {
+    const spy = vi.spyOn(account, "getSubscription").mockResolvedValue({
+      tier: "opus",
     });
+    const first = await startConsent();
+    const secondRes = await handleAuthorize(
+      new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
+      first.env,
+      testExecutionContext(),
+    );
+    expect(secondRes.status).toBe(200);
+    const second = fieldsFrom(await secondRes.text());
+    expect(second.consentId).not.toBe(first.consentId);
+
+    const firstPost = await handleAuthorize(
+      postAuthorize(approveBody(first.consentId, first.csrf)),
+      first.env,
+      testExecutionContext(),
+    );
+    const secondPost = await handleAuthorize(
+      postAuthorize(approveBody(second.consentId, second.csrf)),
+      first.env,
+      testExecutionContext(),
+    );
+    spy.mockRestore();
+    expect(firstPost.status).toBe(302);
+    expect(secondPost.status).toBe(302);
+    expect(first.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("redirects deny with access_denied and does not complete", async () => {
+    const { env, consentId, csrf, complete } = await startConsent();
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body,
-      }),
+      postAuthorize(
+        new URLSearchParams({
+          consent_id: consentId,
+          csrf_token: csrf,
+          decision: "deny",
+        }),
+      ),
       env,
       testExecutionContext(),
     );
@@ -281,13 +320,11 @@ describe("OAuth consent", () => {
   });
 
   it("rejects an oversized authorize POST by actual body bytes", async () => {
-    const { env, cookies, csrf, complete } = await startConsent();
+    const { env, consentId, csrf, complete } = await startConsent();
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body: `csrf_token=${csrf}&decision=approve&nai_token=${"a".repeat(70_000)}`,
-      }),
+      postAuthorize(
+        `consent_id=${consentId}&csrf_token=${csrf}&decision=approve&nai_token=${"a".repeat(70_000)}`,
+      ),
       env,
       testExecutionContext(),
     );
@@ -324,26 +361,14 @@ describe("OAuth consent", () => {
       }),
     });
     const start = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize?client_id=chatgpt-client"),
+      new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
       env,
       testExecutionContext(),
     );
     expect(start.status).toBe(200);
-    const html = await start.text();
-    const csrf = /name="csrf_token" value="([^"]+)"/.exec(html)?.[1];
-    expect(csrf).toBeTruthy();
-    const cookies = cookiesFrom(start);
-    const body = new URLSearchParams({
-      decision: "approve",
-      csrf_token: csrf!,
-      nai_token: "abcdefghijklmnop",
-    });
+    const { csrf, consentId } = fieldsFrom(await start.text());
     const fail = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body,
-      }),
+      postAuthorize(approveBody(consentId, csrf)),
       env,
       testExecutionContext(),
     );
@@ -351,15 +376,7 @@ describe("OAuth consent", () => {
     expect(complete).not.toHaveBeenCalled();
 
     const retry = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          decision: "approve",
-          csrf_token: csrf!,
-          nai_token: "abcdefghijklmnop",
-        }),
-      }),
+      postAuthorize(approveBody(consentId, csrf)),
       env,
       testExecutionContext(),
     );
@@ -369,7 +386,7 @@ describe("OAuth consent", () => {
   });
 
   it("rejects a stored consent redirect that is not allowlisted", async () => {
-    const { env, cookies, csrf, complete } = await startConsent();
+    const { env, consentId, csrf, complete } = await startConsent();
     const listed = await env.OAUTH_KV.list({ prefix: "consent:" });
     expect(listed.keys).toHaveLength(1);
     const key = listed.keys[0]!.name;
@@ -380,15 +397,7 @@ describe("OAuth consent", () => {
     rec.request.redirectUri = "https://evil.example/steal";
     await env.OAUTH_KV.put(key, JSON.stringify(rec));
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          decision: "approve",
-          csrf_token: csrf,
-          nai_token: "abcdefghijklmnop",
-        }),
-      }),
+      postAuthorize(approveBody(consentId, csrf)),
       env,
       testExecutionContext(),
     );
@@ -401,19 +410,11 @@ describe("OAuth consent", () => {
     const spy = vi.spyOn(account, "getSubscription").mockResolvedValue({
       tier: "opus",
     });
-    const { env, cookies, csrf, complete } = await startConsent(async () => ({
+    const { env, consentId, csrf, complete } = await startConsent(async () => ({
       redirectTo: "https://evil.example/steal?code=abc",
     }));
     const res = await handleAuthorize(
-      new Request("http://127.0.0.1:8787/authorize", {
-        method: "POST",
-        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          decision: "approve",
-          csrf_token: csrf,
-          nai_token: "abcdefghijklmnop",
-        }),
-      }),
+      postAuthorize(approveBody(consentId, csrf)),
       env,
       testExecutionContext(),
     );
@@ -421,5 +422,31 @@ describe("OAuth consent", () => {
     expect(res.status).toBe(400);
     expect(res.headers.get("Location")).toBeNull();
     expect(complete).toHaveBeenCalledOnce();
+  });
+});
+
+describe("consent helpers", () => {
+  it("accepts UUID consent ids and same-origin POSTs", async () => {
+    const { isConsentId, isSameOriginRequest } = await import(
+      "../src/oauth/consent"
+    );
+    expect(isConsentId("a1b2c3d4-e5f6-7890-abcd-ef1234567890")).toBe(true);
+    expect(isConsentId("not-a-uuid")).toBe(false);
+    expect(
+      isSameOriginRequest(
+        new Request("http://127.0.0.1:8787/authorize", {
+          method: "POST",
+          headers: { Origin: "http://127.0.0.1:8787" },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isSameOriginRequest(
+        new Request("http://127.0.0.1:8787/authorize", {
+          method: "POST",
+          headers: { Origin: "https://evil.example" },
+        }),
+      ),
+    ).toBe(false);
   });
 });

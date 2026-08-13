@@ -2,47 +2,16 @@ import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
 import { OAUTH_CONSENT_TTL_SECONDS } from "../limits";
 
 const KV_PREFIX = "consent:";
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type ConsentRecord = {
   request: AuthRequest;
   csrf: string;
 };
 
-export type CookieNames = {
-  csrf: string;
-  consent: string;
-  flags: string;
-};
-
-export function cookieNames(url: URL): CookieNames {
-  const https = url.protocol === "https:";
-  const flags = https
-    ? "HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=600"
-    : "HttpOnly; Path=/; SameSite=Lax; Max-Age=600";
-  return {
-    csrf: https ? "__Host-OAUTH_CSRF" : "OAUTH_CSRF",
-    consent: https ? "__Host-OAUTH_CONSENT" : "OAUTH_CONSENT",
-    flags,
-  };
-}
-
-export function clearCookie(name: string, url: URL): string {
-  const https = url.protocol === "https:";
-  const flags = https
-    ? "HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=0"
-    : "HttpOnly; Path=/; SameSite=Lax; Max-Age=0";
-  return `${name}=; ${flags}`;
-}
-
-export function readCookie(header: string | null, name: string): string | null {
-  if (!header) return null;
-  for (const part of header.split(";")) {
-    const trimmed = part.trim();
-    if (!trimmed.startsWith(`${name}=`)) continue;
-    const value = trimmed.slice(name.length + 1);
-    return value || null;
-  }
-  return null;
+export function isConsentId(value: string): boolean {
+  return UUID_RE.test(value);
 }
 
 export async function putConsent(
@@ -81,4 +50,24 @@ export function timingSafeEqual(a: string, b: string): boolean {
     mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+/** Same-origin POST check so a cross-site form cannot submit a stolen consent id. */
+export function isSameOriginRequest(request: Request): boolean {
+  const url = new URL(request.url);
+  const origin = request.headers.get("Origin");
+  if (origin) {
+    try {
+      return new URL(origin).origin === url.origin;
+    } catch {
+      return false;
+    }
+  }
+  const referer = request.headers.get("Referer");
+  if (!referer) return false;
+  try {
+    return new URL(referer).origin === url.origin;
+  } catch {
+    return false;
+  }
 }

@@ -12,10 +12,9 @@ import { MAX_AUTHORIZE_BODY_BYTES } from "../limits";
 import { getSubscription } from "../nai/account";
 import { enforceIpRateLimit } from "../ratelimit";
 import {
-  clearCookie,
-  cookieNames,
+  isConsentId,
+  isSameOriginRequest,
   putConsent,
-  readCookie,
   takeConsent,
   timingSafeEqual,
 } from "./consent";
@@ -55,69 +54,55 @@ async function renderAuthorize(request: Request, env: Env): Promise<Response> {
     return htmlResponse(400, errorPage(disallowedRedirectMessage));
   }
 
-  const url = new URL(request.url);
-  const names = cookieNames(url);
   const consentId = crypto.randomUUID();
   const csrf = crypto.randomUUID();
   await putConsent(env.OAUTH_KV, consentId, { request: oauthReq, csrf });
 
   return htmlResponse(
     200,
-    consentPage({ client, oauthReq, csrf, error: null }),
-    [
-      `${names.consent}=${consentId}; ${names.flags}`,
-      `${names.csrf}=${csrf}; ${names.flags}`,
-    ],
+    consentPage({ client, oauthReq, consentId, csrf, error: null }),
   );
 }
 
 async function submitAuthorize(request: Request, env: Env): Promise<Response> {
   const inbound = await limitRequestBody(request, MAX_AUTHORIZE_BODY_BYTES);
-  const url = new URL(inbound.url);
-  const names = cookieNames(url);
-  const cookieHeader = inbound.headers.get("Cookie");
-  const consentId = readCookie(cookieHeader, names.consent);
-  const csrfCookie = readCookie(cookieHeader, names.csrf);
-  const clear = [clearCookie(names.consent, url), clearCookie(names.csrf, url)];
-
   const provider = requireProvider(env);
 
-  if (!consentId || !csrfCookie) {
-    return htmlResponse(
-      400,
-      errorPage("Authorization session expired. Start again from your MCP client."),
-      clear,
-    );
+  if (!isSameOriginRequest(inbound)) {
+    return htmlResponse(400, errorPage("Invalid authorization session."));
   }
 
   const form = await inbound.formData();
+  const consentId = formString(form, "consent_id");
   const csrfForm = formString(form, "csrf_token");
   const decision = formString(form, "decision");
 
-  if (!csrfForm || !timingSafeEqual(csrfForm, csrfCookie)) {
-    await takeConsent(env.OAUTH_KV, consentId);
-    return htmlResponse(400, errorPage("Invalid authorization session."), clear);
+  if (!isConsentId(consentId) || !csrfForm) {
+    return htmlResponse(
+      400,
+      errorPage("Authorization session expired. Start again from your MCP client."),
+    );
   }
 
   if (decision === "deny") {
     const record = await takeConsent(env.OAUTH_KV, consentId);
-    if (!record || !timingSafeEqual(record.csrf, csrfCookie)) {
-      return htmlResponse(400, errorPage("Invalid authorization session."), clear);
+    if (!record || !timingSafeEqual(record.csrf, csrfForm)) {
+      return htmlResponse(400, errorPage("Invalid authorization session."));
     }
-    return denyRedirect(record.request, clear);
+    return denyRedirect(record.request);
   }
 
   if (decision !== "approve") {
     await takeConsent(env.OAUTH_KV, consentId);
-    return htmlResponse(400, errorPage("Invalid authorization session."), clear);
+    return htmlResponse(400, errorPage("Invalid authorization session."));
   }
 
   const record = await takeConsent(env.OAUTH_KV, consentId);
-  if (!record || !timingSafeEqual(record.csrf, csrfCookie)) {
-    return htmlResponse(400, errorPage("Invalid authorization session."), clear);
+  if (!record || !timingSafeEqual(record.csrf, csrfForm)) {
+    return htmlResponse(400, errorPage("Invalid authorization session."));
   }
   if (!isAllowedOAuthRedirect(record.request.redirectUri)) {
-    return htmlResponse(400, errorPage(disallowedRedirectMessage), clear);
+    return htmlResponse(400, errorPage(disallowedRedirectMessage));
   }
 
   let client: ClientInfo | null;
@@ -138,6 +123,7 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
       consentPage({
         client,
         oauthReq: record.request,
+        consentId,
         csrf: record.csrf,
         error: "Enter a NovelAI Persistent API token (at least 8 characters).",
       }),
@@ -154,6 +140,7 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
       consentPage({
         client,
         oauthReq: record.request,
+        consentId,
         csrf: record.csrf,
         error: message,
       }),
@@ -176,12 +163,13 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
   }
 
   if (!isAllowedOAuthRedirect(redirectTo)) {
-    return htmlResponse(400, errorPage(disallowedRedirectMessage), clear);
+    return htmlResponse(400, errorPage(disallowedRedirectMessage));
   }
 
-  const headers = new Headers({ Location: redirectTo });
-  for (const cookie of clear) headers.append("Set-Cookie", cookie);
-  return new Response(null, { status: 302, headers });
+  return new Response(null, {
+    status: 302,
+    headers: { Location: redirectTo },
+  });
 }
 
 function requireProvider(env: Env) {
@@ -226,22 +214,24 @@ function authorizationErrorResponse(err: AuthorizationError): Response {
   return Response.redirect(redirect.toString(), 302);
 }
 
-function denyRedirect(oauthReq: AuthRequest, clear: string[]): Response {
+function denyRedirect(oauthReq: AuthRequest): Response {
   if (!isAllowedOAuthRedirect(oauthReq.redirectUri)) {
-    return htmlResponse(400, errorPage(disallowedRedirectMessage), clear);
+    return htmlResponse(400, errorPage(disallowedRedirectMessage));
   }
   const redirect = new URL(oauthReq.redirectUri);
   redirect.searchParams.set("error", "access_denied");
   if (oauthReq.state) redirect.searchParams.set("state", oauthReq.state);
   if (oauthReq.issuer) redirect.searchParams.set("iss", oauthReq.issuer);
-  const headers = new Headers({ Location: redirect.toString() });
-  for (const cookie of clear) headers.append("Set-Cookie", cookie);
-  return new Response(null, { status: 302, headers });
+  return new Response(null, {
+    status: 302,
+    headers: { Location: redirect.toString() },
+  });
 }
 
 function consentPage(opts: {
   client: ClientInfo | null;
   oauthReq: AuthRequest;
+  consentId: string;
   csrf: string;
   error: string | null;
 }): string {
@@ -293,6 +283,7 @@ function consentPage(opts: {
     <p class="hint">Confirm this is the client and callback you expect before pasting a token. Scopes: ${scopes}. Your Persistent API token is stored encrypted with this grant and is used only to call NovelAI on your behalf. Do not send your NovelAI email or password.</p>
     ${error}
     <form method="post" action="/authorize" autocomplete="off">
+      <input type="hidden" name="consent_id" value="${escapeHtml(opts.consentId)}">
       <input type="hidden" name="csrf_token" value="${escapeHtml(opts.csrf)}">
       <label for="nai_token">NovelAI Persistent API token</label>
       <input id="nai_token" name="nai_token" type="password" maxlength="4096" spellcheck="false">
