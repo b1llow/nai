@@ -1,12 +1,14 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 import app from "../app";
 import type { Env } from "../env";
-import { MCP_ISSUER, MCP_PATH, MCP_RESOURCE } from "../limits";
+import { MCP_PATH, mcpResourceFromRequest } from "../limits";
 import { logError } from "../log";
 import { handleMcp } from "../mcp/server";
 import { handleAuthorize } from "./authorize";
 import { OAUTH_SCOPES, resolveNaiBearer } from "./props";
 import { clientRegistrationCallback } from "./redirects";
+
+const providers = new Map<string, OAuthProvider<Env>>();
 
 async function handleDefault(
   request: Request,
@@ -20,7 +22,8 @@ async function handleDefault(
   return app.fetch(request, env, ctx);
 }
 
-export function createNaiOAuthProvider(): OAuthProvider<Env> {
+export function createNaiOAuthProvider(resource: string): OAuthProvider<Env> {
+  const issuer = new URL(resource).origin;
   return new OAuthProvider<Env>({
     apiRoute: MCP_PATH,
     apiHandler: { fetch: handleMcp },
@@ -43,11 +46,21 @@ export function createNaiOAuthProvider(): OAuthProvider<Env> {
       }
     },
     resourceMetadata: {
-      resource: MCP_RESOURCE,
-      authorization_servers: [MCP_ISSUER],
+      resource,
+      ...(issuer.startsWith("https:") ? { authorization_servers: [issuer] } : {}),
       resource_name: "NovelAI MCP",
       scopes_supported: ["mcp"],
       bearer_methods_supported: ["header"],
     },
   });
+}
+
+/** One provider per resource identifier so audience matches the request origin. */
+export function oauthProviderFor(request: Request): OAuthProvider<Env> {
+  const resource = mcpResourceFromRequest(request);
+  const existing = providers.get(resource);
+  if (existing) return existing;
+  const created = createNaiOAuthProvider(resource);
+  providers.set(resource, created);
+  return created;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MCP_RESOURCE } from "../src/limits";
+import { MCP_RESOURCE, mcpResourceFromRequest } from "../src/limits";
 import {
   grantedScopes,
   isInternalOAuthAccessToken,
@@ -99,6 +99,41 @@ describe("resolveNaiBearer", () => {
       env: testEnv(),
     });
     expect(out).toBeNull();
+  });
+
+  it("binds the audience to the request origin for local and workers.dev hosts", async () => {
+    const local = await resolveNaiBearer({
+      token: "header-token-xx",
+      request: new Request("http://127.0.0.1:8787/mcp"),
+      env: testEnv(),
+    });
+    expect(local?.audience).toBe("http://127.0.0.1:8787/mcp");
+
+    const workersDev = await resolveNaiBearer({
+      token: "header-token-xx",
+      request: new Request("https://nai.example.workers.dev/mcp"),
+      env: testEnv(),
+    });
+    expect(workersDev?.audience).toBe("https://nai.example.workers.dev/mcp");
+  });
+});
+
+describe("mcpResourceFromRequest", () => {
+  it("pins allowed hosts to origin + /mcp and others to the canonical resource", () => {
+    expect(
+      mcpResourceFromRequest(new Request("https://nai.hoshinoaya.com/mcp")),
+    ).toBe(MCP_RESOURCE);
+    expect(
+      mcpResourceFromRequest(new Request("http://127.0.0.1:8787/mcp")),
+    ).toBe("http://127.0.0.1:8787/mcp");
+    expect(
+      mcpResourceFromRequest(
+        new Request("https://nai.example.workers.dev/v1/models"),
+      ),
+    ).toBe("https://nai.example.workers.dev/mcp");
+    expect(
+      mcpResourceFromRequest(new Request("https://evil.example/mcp")),
+    ).toBe(MCP_RESOURCE);
   });
 });
 

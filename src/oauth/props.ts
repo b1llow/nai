@@ -1,7 +1,7 @@
 import type { ResolveExternalTokenInput } from "@cloudflare/workers-oauth-provider";
 import { parseAuthorization, resolveMcpAuthorization } from "../auth";
 import type { Env } from "../env";
-import { MCP_RESOURCE } from "../limits";
+import { mcpResourceFromRequest } from "../limits";
 
 export const OAUTH_SCOPES = ["mcp", "offline_access"] as const;
 
@@ -58,6 +58,7 @@ export function isInternalOAuthAccessToken(token: string): boolean {
  */
 export async function resolveNaiBearer({
   token,
+  request,
 }: ResolveExternalTokenInput<Env>): Promise<{
   props: NaiAuthProps;
   audience: string;
@@ -66,7 +67,7 @@ export async function resolveNaiBearer({
   try {
     return {
       props: { naiAuth: parseAuthorization(`Bearer ${token}`) },
-      audience: MCP_RESOURCE,
+      audience: mcpResourceFromRequest(request),
     };
   } catch {
     return null;

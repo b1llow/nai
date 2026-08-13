@@ -34,7 +34,18 @@ export function isAllowedOAuthRedirect(raw: string): boolean {
       path === "/connector_platform_oauth_redirect"
     );
   }
-  return host === "claude.ai" || host === "www.claude.ai";
+  if (
+    host === "claude.ai" ||
+    host === "www.claude.ai" ||
+    host === "claude.com" ||
+    host === "www.claude.com"
+  ) {
+    return (
+      url.pathname === "/api/mcp/auth_callback" ||
+      url.pathname === "/api/mcp/auth_callback/"
+    );
+  }
+  return false;
 }
 
 function isLoopbackHost(host: string): boolean {

@@ -51,7 +51,7 @@ The header is forwarded upstream unchanged.
 
 ChatGPT Cloud and other remote MCP hosts **cannot** set a custom `Authorization` header. This Worker is an OAuth 2.1 authorization server (PKCE S256, CIMD + DCR, refresh tokens). On `/authorize`, paste a NovelAI Persistent API token. The grant stores that token encrypted in Workers KV (`OAUTH_KV`) and issues ChatGPT its own access token. Completing OAuth does **not** send your NovelAI email or password to this Worker.
 
-Protected resource metadata pins `resource` to `https://nai.hoshinoaya.com/mcp`. Dynamic client registration only accepts loopback URLs plus ChatGPT (`chatgpt.com` / `chat.openai.com` connector OAuth callbacks) and Claude (`claude.ai`) redirects. The consent page shows the client name (default **an MCP client**, never assumed to be ChatGPT), `client_id`, and `redirect_uri` so you can confirm the callback before pasting a token.
+Protected resource metadata pins `resource` to the request origin plus `/mcp` for hosts this Worker serves (`nai.hoshinoaya.com`, loopback, `*.workers.dev`). ChatGPT should use `https://nai.hoshinoaya.com/mcp`. Dynamic client registration only accepts loopback URLs, ChatGPT connector OAuth callbacks, and Claude's `https://claude.ai/api/mcp/auth_callback`. The consent page shows the client name (default **an MCP client**, never assumed to be ChatGPT), `client_id`, and `redirect_uri` so you can confirm the callback before pasting a token.
 
 ### ChatGPT (Developer Mode)
 

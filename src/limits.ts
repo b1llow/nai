@@ -40,6 +40,34 @@ export const MCP_PATH = "/mcp";
 export const MCP_RESOURCE = `https://${MCP_CUSTOM_DOMAIN}${MCP_PATH}`;
 export const MCP_ISSUER = `https://${MCP_CUSTOM_DOMAIN}`;
 
+/** Hostnames this Worker serves `/mcp` on. Unknown hosts stay bound to `MCP_RESOURCE`. */
+export function isAllowedMcpHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === MCP_CUSTOM_DOMAIN ||
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.endsWith(".workers.dev")
+  );
+}
+
+/**
+ * RFC 9728 resource identifier for this request. Production ChatGPT uses
+ * `MCP_RESOURCE`; wrangler and `*.workers.dev` bind tokens to that origin
+ * so audience checks succeed without weakening the custom-domain pin.
+ */
+export function mcpResourceFromRequest(request: Request): string {
+  try {
+    const url = new URL(request.url);
+    if (isAllowedMcpHostname(url.hostname)) return `${url.origin}${MCP_PATH}`;
+  } catch {
+    /* ignore */
+  }
+  return MCP_RESOURCE;
+}
+
 export type NaiHostKind = "text" | "image" | "api";
 
 const TEXT_HOSTS = new Set(["text.novelai.net", "api.novelai.net"]);

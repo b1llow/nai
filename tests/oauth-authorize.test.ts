@@ -1,5 +1,6 @@
 import {
   AuthorizationError,
+  CimdFetchError,
   type AuthRequest,
   type OAuthHelpers,
 } from "@cloudflare/workers-oauth-provider";
@@ -292,5 +293,133 @@ describe("OAuth consent", () => {
     );
     expect(res.status).toBe(413);
     expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("restores consent when client lookup fails so the user can retry", async () => {
+    const spy = vi.spyOn(account, "getSubscription").mockResolvedValue({
+      tier: "opus",
+    });
+    let lookups = 0;
+    const complete = vi.fn(async () => ({
+      redirectTo: "https://chatgpt.com/connector/oauth/callback?code=abc",
+    })) as unknown as OAuthHelpers["completeAuthorization"];
+    const env = testEnv({
+      OAUTH_PROVIDER: mockProvider({
+        completeAuthorization: complete,
+        lookupClient: async () => {
+          lookups += 1;
+          if (lookups === 2) {
+            throw new CimdFetchError(
+              "https://chatgpt.com/client.json",
+              new Error("timeout"),
+            );
+          }
+          return {
+            clientId: "chatgpt-client",
+            redirectUris: [oauthReq.redirectUri],
+            clientName: "ChatGPT",
+            tokenEndpointAuthMethod: "none",
+          };
+        },
+      }),
+    });
+    const start = await handleAuthorize(
+      new Request("http://127.0.0.1:8787/authorize?client_id=chatgpt-client"),
+      env,
+      testExecutionContext(),
+    );
+    expect(start.status).toBe(200);
+    const html = await start.text();
+    const csrf = /name="csrf_token" value="([^"]+)"/.exec(html)?.[1];
+    expect(csrf).toBeTruthy();
+    const cookies = cookiesFrom(start);
+    const body = new URLSearchParams({
+      decision: "approve",
+      csrf_token: csrf!,
+      nai_token: "abcdefghijklmnop",
+    });
+    const fail = await handleAuthorize(
+      new Request("http://127.0.0.1:8787/authorize", {
+        method: "POST",
+        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
+        body,
+      }),
+      env,
+      testExecutionContext(),
+    );
+    expect(fail.status).toBe(400);
+    expect(complete).not.toHaveBeenCalled();
+
+    const retry = await handleAuthorize(
+      new Request("http://127.0.0.1:8787/authorize", {
+        method: "POST",
+        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          decision: "approve",
+          csrf_token: csrf!,
+          nai_token: "abcdefghijklmnop",
+        }),
+      }),
+      env,
+      testExecutionContext(),
+    );
+    spy.mockRestore();
+    expect(retry.status).toBe(302);
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a stored consent redirect that is not allowlisted", async () => {
+    const { env, cookies, csrf, complete } = await startConsent();
+    const listed = await env.OAUTH_KV.list({ prefix: "consent:" });
+    expect(listed.keys).toHaveLength(1);
+    const key = listed.keys[0]!.name;
+    const rec = (await env.OAUTH_KV.get(key, "json")) as {
+      request: AuthRequest;
+      csrf: string;
+    };
+    rec.request.redirectUri = "https://evil.example/steal";
+    await env.OAUTH_KV.put(key, JSON.stringify(rec));
+    const res = await handleAuthorize(
+      new Request("http://127.0.0.1:8787/authorize", {
+        method: "POST",
+        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          decision: "approve",
+          csrf_token: csrf,
+          nai_token: "abcdefghijklmnop",
+        }),
+      }),
+      env,
+      testExecutionContext(),
+    );
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Location")).toBeNull();
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("does not follow a disallowed completeAuthorization redirect", async () => {
+    const spy = vi.spyOn(account, "getSubscription").mockResolvedValue({
+      tier: "opus",
+    });
+    const { env, cookies, csrf, complete } = await startConsent(async () => ({
+      redirectTo: "https://evil.example/steal?code=abc",
+    }));
+    const res = await handleAuthorize(
+      new Request("http://127.0.0.1:8787/authorize", {
+        method: "POST",
+        headers: { Cookie: cookies, "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          decision: "approve",
+          csrf_token: csrf,
+          nai_token: "abcdefghijklmnop",
+        }),
+      }),
+      env,
+      testExecutionContext(),
+    );
+    spy.mockRestore();
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Location")).toBeNull();
+    expect(complete).toHaveBeenCalledOnce();
   });
 });

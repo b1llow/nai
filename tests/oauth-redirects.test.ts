@@ -22,6 +22,11 @@ describe("isAllowedOAuthRedirect", () => {
     expect(isAllowedOAuthRedirect("https://claude.ai/api/mcp/auth_callback")).toBe(
       true,
     );
+    expect(
+      isAllowedOAuthRedirect("https://www.claude.ai/api/mcp/auth_callback"),
+    ).toBe(true);
+    expect(isAllowedOAuthRedirect("https://claude.ai/login")).toBe(false);
+    expect(isAllowedOAuthRedirect("https://claude.ai/api/mcp/other")).toBe(false);
     expect(isAllowedOAuthRedirect("http://127.0.0.1:8787/callback")).toBe(true);
     expect(isAllowedOAuthRedirect("http://[::1]/callback")).toBe(true);
     expect(isAllowedOAuthRedirect("http://localhost:6274/oauth/callback")).toBe(
@@ -45,7 +50,7 @@ describe("isAllowedOAuthRedirect", () => {
 });
 
 describe("clientRegistrationCallback", () => {
-  it("allows ChatGPT DCR metadata", () => {
+  it("allows ChatGPT and Claude DCR metadata", () => {
     expect(
       clientRegistrationCallback({
         clientMetadata: {
@@ -54,6 +59,20 @@ describe("clientRegistrationCallback", () => {
         request: new Request("https://nai.hoshinoaya.com/oauth/register"),
       }),
     ).toBeUndefined();
+    expect(
+      clientRegistrationCallback({
+        clientMetadata: {
+          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+        },
+        request: new Request("https://nai.hoshinoaya.com/oauth/register"),
+      }),
+    ).toBeUndefined();
+    expect(
+      clientRegistrationCallback({
+        clientMetadata: { redirect_uris: ["https://claude.ai/login"] },
+        request: new Request("https://nai.hoshinoaya.com/oauth/register"),
+      }),
+    ).toMatchObject({ code: "invalid_redirect_uri" });
   });
 
   it("rejects a missing or disallowed redirect_uri", () => {

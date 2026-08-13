@@ -85,6 +85,48 @@ describe("MCP OAuth discovery", () => {
     expect(res.status).not.toBe(401);
   });
 
+  it("accepts a format-valid NovelAI Bearer on wrangler and workers.dev hosts", async () => {
+    const local = await worker.fetch(
+      new Request("http://127.0.0.1:8787/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer header-token-xx",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      }),
+      env,
+      ctx,
+    );
+    expect(local.status).not.toBe(401);
+    expect(local.status).not.toBe(500);
+
+    const workersDev = await worker.fetch(
+      new Request("https://nai.example.workers.dev/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer header-token-xx",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      }),
+      env,
+      ctx,
+    );
+    expect(workersDev.status).not.toBe(401);
+
+    const localMeta = await worker.fetch(
+      new Request(
+        "http://127.0.0.1:8787/.well-known/oauth-protected-resource/mcp",
+      ),
+      env,
+      ctx,
+    );
+    expect(localMeta.status).toBe(200);
+    const localBody = (await localMeta.json()) as { resource?: string };
+    expect(localBody.resource).toBe("http://127.0.0.1:8787/mcp");
+  });
+
   it("rejects a malformed Bearer through the OAuth gate", async () => {
     const res = await worker.fetch(
       new Request("https://nai.hoshinoaya.com/mcp", {
@@ -152,6 +194,38 @@ describe("MCP OAuth discovery", () => {
     expect(evil.status).toBe(400);
     const body = (await evil.json()) as { error?: string };
     expect(body.error).toBe("invalid_redirect_uri");
+  });
+
+  it("registers Claude's MCP callback and rejects other claude.ai paths", async () => {
+    const ok = await worker.fetch(
+      new Request("https://nai.hoshinoaya.com/oauth/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          client_name: "Claude",
+          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+          token_endpoint_auth_method: "none",
+        }),
+      }),
+      env,
+      ctx,
+    );
+    expect(ok.status).toBe(201);
+
+    const evil = await worker.fetch(
+      new Request("https://nai.hoshinoaya.com/oauth/register", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          client_name: "Claude",
+          redirect_uris: ["https://claude.ai/login"],
+          token_endpoint_auth_method: "none",
+        }),
+      }),
+      env,
+      ctx,
+    );
+    expect(evil.status).toBe(400);
   });
 
   it("returns 429 when DCR is rate-limited", async () => {

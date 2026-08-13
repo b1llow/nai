@@ -80,6 +80,8 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
   const csrfCookie = readCookie(cookieHeader, names.csrf);
   const clear = [clearCookie(names.consent, url), clearCookie(names.csrf, url)];
 
+  const provider = requireProvider(env);
+
   if (!consentId || !csrfCookie) {
     return htmlResponse(
       400,
@@ -118,8 +120,13 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
     return htmlResponse(400, errorPage(disallowedRedirectMessage), clear);
   }
 
-  const provider = requireProvider(env);
-  const client = await provider.lookupClient(record.request.clientId);
+  let client: ClientInfo | null;
+  try {
+    client = await provider.lookupClient(record.request.clientId);
+  } catch (err) {
+    await putConsent(env.OAUTH_KV, consentId, record);
+    throw err;
+  }
 
   let naiAuth: string;
   try {
@@ -154,13 +161,23 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
   }
 
   const rawToken = naiAuth.slice("Bearer ".length);
-  const { redirectTo } = await provider.completeAuthorization({
-    request: record.request,
-    userId: await naiUserId(rawToken),
-    metadata: { clientName: client?.clientName ?? null },
-    scope: grantedScopes(record.request.scope),
-    props: { naiAuth },
-  });
+  let redirectTo: string;
+  try {
+    ({ redirectTo } = await provider.completeAuthorization({
+      request: record.request,
+      userId: await naiUserId(rawToken),
+      metadata: { clientName: client?.clientName ?? null },
+      scope: grantedScopes(record.request.scope),
+      props: { naiAuth },
+    }));
+  } catch (err) {
+    await putConsent(env.OAUTH_KV, consentId, record);
+    throw err;
+  }
+
+  if (!isAllowedOAuthRedirect(redirectTo)) {
+    return htmlResponse(400, errorPage(disallowedRedirectMessage), clear);
+  }
 
   const headers = new Headers({ Location: redirectTo });
   for (const cookie of clear) headers.append("Set-Cookie", cookie);
