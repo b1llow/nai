@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import type { AppEnv } from "./types";
 import { openaiError } from "./errors";
-import { flattenContent, normalizeRole } from "./content";
+import { assertMessagesBudget, flattenContent, normalizeRole } from "./content";
 import {
   runChatCompletion,
   type ChatBody,
@@ -10,8 +10,18 @@ import {
   formatSseEvent,
   parseSseJson,
   stripNaiFields,
+  SseLimitError,
   type ChatCompletion,
 } from "./sse";
+import {
+  MAX_COMPLETION_CHARS,
+  MAX_MESSAGES,
+  MAX_MESSAGE_CHARS,
+  MAX_MODEL_LEN,
+  MAX_TOKENS,
+  MAX_USER_LEN,
+  safeIdent,
+} from "./limits";
 
 function rid(prefix: string): string {
   const hex =
@@ -39,6 +49,12 @@ export function responsesInputToMessages(raw: unknown): {
 
   if (typeof req.model !== "string" || !req.model) {
     throw openaiError(400, "model is required", {
+      type: "invalid_request_error",
+      param: "model",
+    });
+  }
+  if (req.model.length > MAX_MODEL_LEN) {
+    throw openaiError(400, "model is too long", {
       type: "invalid_request_error",
       param: "model",
     });
@@ -88,23 +104,45 @@ export function responsesInputToMessages(raw: unknown): {
     const t = req.text as Record<string, unknown>;
     const fmt = t.format as Record<string, unknown> | undefined;
     if (fmt && (fmt.type === "json_schema" || fmt.type === "json_object")) {
-      throw openaiError(400, `${String(fmt.type)} response format is not supported`, {
-        type: "invalid_request_error",
-        param: "text",
-      });
+      throw openaiError(
+        400,
+        `${safeIdent(fmt.type, 32)} response format is not supported`,
+        {
+          type: "invalid_request_error",
+          param: "text",
+        },
+      );
     }
   }
 
   const messages: Array<{ role: string; content: string }> = [];
 
   if (typeof req.instructions === "string" && req.instructions) {
+    if (req.instructions.length > MAX_MESSAGE_CHARS) {
+      throw openaiError(400, "instructions is too long", {
+        type: "invalid_request_error",
+        param: "instructions",
+      });
+    }
     messages.push({ role: "system", content: req.instructions });
   }
 
   const input = req.input;
   if (typeof input === "string") {
+    if (input.length > MAX_MESSAGE_CHARS) {
+      throw openaiError(400, "input is too long", {
+        type: "invalid_request_error",
+        param: "input",
+      });
+    }
     messages.push({ role: "user", content: input });
   } else if (Array.isArray(input)) {
+    if (input.length > MAX_MESSAGES) {
+      throw openaiError(400, `input must contain at most ${MAX_MESSAGES} items`, {
+        type: "invalid_request_error",
+        param: "input",
+      });
+    }
     for (const item of input) {
       if (!item || typeof item !== "object") {
         throw openaiError(400, "invalid input item", {
@@ -123,7 +161,7 @@ export function responsesInputToMessages(raw: unknown): {
       if (it.type != null && it.type !== "message") {
         throw openaiError(
           400,
-          `unsupported input item type: ${String(it.type)}`,
+          `unsupported input item type: ${safeIdent(it.type, 32)}`,
           {
             type: "invalid_request_error",
             param: "input",
@@ -149,6 +187,7 @@ export function responsesInputToMessages(raw: unknown): {
       param: "input",
     });
   }
+  assertMessagesBudget(messages, "input");
 
   const out: {
     model: string;
@@ -165,11 +204,44 @@ export function responsesInputToMessages(raw: unknown): {
   };
 
   if (typeof req.max_output_tokens === "number") {
-    out.max_tokens = req.max_output_tokens;
+    if (!Number.isFinite(req.max_output_tokens)) {
+      throw openaiError(400, "max_output_tokens must be a number", {
+        type: "invalid_request_error",
+        param: "max_output_tokens",
+      });
+    }
+    out.max_tokens = Math.min(
+      MAX_TOKENS,
+      Math.max(1, Math.trunc(req.max_output_tokens)),
+    );
   }
-  if (typeof req.temperature === "number") out.temperature = req.temperature;
-  if (typeof req.top_p === "number") out.top_p = req.top_p;
-  if (typeof req.user === "string") out.user = req.user;
+  if (typeof req.temperature === "number") {
+    if (!Number.isFinite(req.temperature)) {
+      throw openaiError(400, "temperature must be a number", {
+        type: "invalid_request_error",
+        param: "temperature",
+      });
+    }
+    out.temperature = Math.min(2, Math.max(0, req.temperature));
+  }
+  if (typeof req.top_p === "number") {
+    if (!Number.isFinite(req.top_p)) {
+      throw openaiError(400, "top_p must be a number", {
+        type: "invalid_request_error",
+        param: "top_p",
+      });
+    }
+    out.top_p = Math.min(1, Math.max(0, req.top_p));
+  }
+  if (typeof req.user === "string") {
+    if (req.user.length > MAX_USER_LEN) {
+      throw openaiError(400, "user must be a short string", {
+        type: "invalid_request_error",
+        param: "user",
+      });
+    }
+    out.user = req.user;
+  }
 
   return out;
 }
@@ -178,24 +250,31 @@ export function buildResponseObject(opts: {
   id: string;
   model: string;
   created_at: number;
-  status: "completed" | "in_progress" | "failed";
+  status: "completed" | "in_progress" | "failed" | "incomplete";
   text: string;
   messageId: string;
   usage?: ChatCompletion["usage"] | null;
   error?: { code: string | null; message: string } | null;
+  incomplete_reason?: string | null;
 }) {
   const usage = opts.usage ?? {
     prompt_tokens: 0,
     completion_tokens: 0,
     total_tokens: 0,
   };
+  const outputStatus =
+    opts.status === "failed" || opts.status === "incomplete"
+      ? "incomplete"
+      : "completed";
   return {
     id: opts.id,
     object: "response" as const,
     created_at: opts.created_at,
     status: opts.status,
     error: opts.error ?? null,
-    incomplete_details: null,
+    incomplete_details: opts.incomplete_reason
+      ? { reason: opts.incomplete_reason }
+      : null,
     model: opts.model,
     output:
       opts.status === "in_progress" && !opts.text
@@ -205,7 +284,7 @@ export function buildResponseObject(opts: {
               id: opts.messageId,
               type: "message" as const,
               role: "assistant" as const,
-              status: opts.status === "failed" ? "incomplete" : "completed",
+              status: outputStatus,
               content: [
                 {
                   type: "output_text" as const,
@@ -271,16 +350,19 @@ export async function handleResponses(c: Context<AppEnv>) {
         });
       }
       const text = result.completion.choices[0]?.message.content ?? "";
+      const truncated =
+        result.completion.choices[0]?.finish_reason === "length";
       detach();
       return c.json(
         buildResponseObject({
           id: responseId,
           model: result.completion.model,
           created_at,
-          status: "completed",
+          status: truncated ? "incomplete" : "completed",
           text,
           messageId,
           usage: result.completion.usage,
+          incomplete_reason: truncated ? "max_output_tokens" : null,
         }),
       );
     }
@@ -300,6 +382,7 @@ export async function handleResponses(c: Context<AppEnv>) {
         model: result.completion.model,
         text,
         usage: result.completion.usage,
+        truncated: result.completion.choices[0]?.finish_reason === "length",
         clientSignal: c.req.raw.signal,
         upstreamAbort: ac,
         onDone: detach,
@@ -332,6 +415,7 @@ export function streamResponsesFromText(opts: {
   model: string;
   text: string;
   usage: ChatCompletion["usage"];
+  truncated?: boolean;
   clientSignal?: AbortSignal;
   upstreamAbort?: AbortController;
   onDone?: () => void;
@@ -464,7 +548,7 @@ export function streamResponsesFromText(opts: {
               id: opts.messageId,
               type: "message",
               role: "assistant",
-              status: "completed",
+              status: opts.truncated ? "incomplete" : "completed",
               content: [
                 {
                   type: "output_text",
@@ -477,20 +561,24 @@ export function streamResponsesFromText(opts: {
           }),
         ),
       );
-      const completed = buildResponseObject({
+      const terminal = buildResponseObject({
         id: opts.responseId,
         model: opts.model,
         created_at: opts.created_at,
-        status: "completed",
+        status: opts.truncated ? "incomplete" : "completed",
         text: opts.text,
         messageId: opts.messageId,
         usage: opts.usage,
+        incomplete_reason: opts.truncated ? "max_output_tokens" : null,
       });
+      const terminalType = opts.truncated
+        ? "response.incomplete"
+        : "response.completed";
       await writer.write(
         encoder.encode(
-          formatSseEvent("response.completed", {
-            type: "response.completed",
-            response: completed,
+          formatSseEvent(terminalType, {
+            type: terminalType,
+            response: terminal,
             sequence_number: seq++,
           }),
         ),
@@ -516,7 +604,7 @@ export function streamResponsesFromText(opts: {
     status: 200,
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "private, no-store",
       Connection: "keep-alive",
     },
   });
@@ -555,6 +643,7 @@ export function streamResponsesFromChat(opts: {
     let fullText = "";
     let usage: ChatCompletion["usage"] | null = null;
     let model = opts.model;
+    let truncated = false;
 
     try {
       const base = buildResponseObject({
@@ -616,45 +705,71 @@ export function streamResponsesFromChat(opts: {
       );
 
       if (opts.upstream.body) {
-        for await (const raw of parseSseJson(opts.upstream.body)) {
-          if (opts.clientSignal?.aborted) break;
-          const chunk = stripNaiFields(raw as Record<string, unknown>);
-          if (typeof chunk.model === "string") model = chunk.model;
-          if (chunk.usage && typeof chunk.usage === "object") {
-            const u = chunk.usage as Record<string, unknown>;
-            usage = {
-              prompt_tokens:
-                typeof u.prompt_tokens === "number" ? u.prompt_tokens : 0,
-              completion_tokens:
-                typeof u.completion_tokens === "number"
-                  ? u.completion_tokens
-                  : 0,
-              total_tokens:
-                typeof u.total_tokens === "number" ? u.total_tokens : 0,
-            };
+        try {
+          for await (const raw of parseSseJson(opts.upstream.body)) {
+            if (opts.clientSignal?.aborted) break;
+            const chunk = stripNaiFields(raw as Record<string, unknown>);
+            if (typeof chunk.model === "string") model = chunk.model;
+            if (chunk.usage && typeof chunk.usage === "object") {
+              const u = chunk.usage as Record<string, unknown>;
+              usage = {
+                prompt_tokens:
+                  typeof u.prompt_tokens === "number" ? u.prompt_tokens : 0,
+                completion_tokens:
+                  typeof u.completion_tokens === "number"
+                    ? u.completion_tokens
+                    : 0,
+                total_tokens:
+                  typeof u.total_tokens === "number" ? u.total_tokens : 0,
+              };
+            }
+            const choices = chunk.choices as
+              | Array<Record<string, unknown>>
+              | undefined;
+            const c0 = choices?.[0];
+            if (c0 && c0.finish_reason === "length") truncated = true;
+            const delta = c0?.delta as Record<string, unknown> | undefined;
+            const content =
+              delta && typeof delta.content === "string" ? delta.content : "";
+            if (!content) continue;
+            if (fullText.length + content.length > MAX_COMPLETION_CHARS) {
+              const room = Math.max(0, MAX_COMPLETION_CHARS - fullText.length);
+              const piece = content.slice(0, room);
+              if (piece) {
+                fullText += piece;
+                await writer.write(
+                  encoder.encode(
+                    formatSseEvent("response.output_text.delta", {
+                      type: "response.output_text.delta",
+                      item_id: opts.messageId,
+                      output_index: 0,
+                      content_index: 0,
+                      delta: piece,
+                      sequence_number: seq++,
+                    }),
+                  ),
+                );
+              }
+              truncated = true;
+              break;
+            }
+            fullText += content;
+            await writer.write(
+              encoder.encode(
+                formatSseEvent("response.output_text.delta", {
+                  type: "response.output_text.delta",
+                  item_id: opts.messageId,
+                  output_index: 0,
+                  content_index: 0,
+                  delta: content,
+                  sequence_number: seq++,
+                }),
+              ),
+            );
           }
-          const choices = chunk.choices as
-            | Array<Record<string, unknown>>
-            | undefined;
-          const delta = choices?.[0]?.delta as
-            | Record<string, unknown>
-            | undefined;
-          const content =
-            delta && typeof delta.content === "string" ? delta.content : "";
-          if (!content) continue;
-          fullText += content;
-          await writer.write(
-            encoder.encode(
-              formatSseEvent("response.output_text.delta", {
-                type: "response.output_text.delta",
-                item_id: opts.messageId,
-                output_index: 0,
-                content_index: 0,
-                delta: content,
-                sequence_number: seq++,
-              }),
-            ),
-          );
+        } catch (err) {
+          if (!(err instanceof SseLimitError)) throw err;
+          truncated = true;
         }
       }
 
@@ -695,7 +810,7 @@ export function streamResponsesFromChat(opts: {
               id: opts.messageId,
               type: "message",
               role: "assistant",
-              status: "completed",
+              status: truncated ? "incomplete" : "completed",
               content: [
                 {
                   type: "output_text",
@@ -709,20 +824,24 @@ export function streamResponsesFromChat(opts: {
         ),
       );
 
-      const completed = buildResponseObject({
+      const terminal = buildResponseObject({
         id: opts.responseId,
         model,
         created_at: opts.created_at,
-        status: "completed",
+        status: truncated ? "incomplete" : "completed",
         text: fullText,
         messageId: opts.messageId,
         usage,
+        incomplete_reason: truncated ? "max_output_tokens" : null,
       });
+      const terminalType = truncated
+        ? "response.incomplete"
+        : "response.completed";
       await writer.write(
         encoder.encode(
-          formatSseEvent("response.completed", {
-            type: "response.completed",
-            response: completed,
+          formatSseEvent(terminalType, {
+            type: terminalType,
+            response: terminal,
             sequence_number: seq++,
           }),
         ),
@@ -771,7 +890,7 @@ export function streamResponsesFromChat(opts: {
     status: 200,
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "private, no-store",
       Connection: "keep-alive",
     },
   });

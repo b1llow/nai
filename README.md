@@ -205,9 +205,13 @@ Chat and Responses always request `stream: true` from NovelAI. Non-stream client
 
 | Binding | Required | Description |
 |---------|----------|-------------|
-| `NAI_BASE_URL` | yes | NovelAI text API origin (default in wrangler: `https://text.novelai.net`) |
+| `NAI_BASE_URL` | yes | NovelAI text API origin. Must be `https://text.novelai.net` or `https://api.novelai.net` (default in wrangler: `https://text.novelai.net`) |
+| `NAI_ALLOW_UNSAFE_BASE_URL` | no | Set to `1` only for local mocks; skips the host allowlist but still requires `http(s)` and rejects URLs with credentials |
+| `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` |
 
-No server-side API key is stored; callers supply the NovelAI token per request.
+Authenticated `/v1/*` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB. Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
+
+No server-side API key is stored; callers supply the NovelAI token per request. Tokens must be printable ASCII Bearer credentials (8–4096 chars).
 
 ## License
 

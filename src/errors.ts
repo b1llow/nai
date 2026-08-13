@@ -1,3 +1,9 @@
+import {
+  sanitizeErrorCode,
+  sanitizeErrorText,
+  sanitizeRetryAfter,
+} from "./limits";
+
 export type OpenAIErrorType =
   | "invalid_request_error"
   | "authentication_error"
@@ -78,7 +84,7 @@ export function mapNaiError(
   const msg = extractMessage(body) || defaultMessage(effectiveStatus);
   const codeFromBody = extractCode(body);
   const hdrs: Record<string, string> = {};
-  const retryAfter = headers?.get("retry-after");
+  const retryAfter = sanitizeRetryAfter(headers?.get("retry-after") ?? null);
   if (retryAfter) hdrs["Retry-After"] = retryAfter;
 
   return new HttpError(effectiveStatus, msg, {
@@ -95,43 +101,50 @@ export function openaiError(
     type?: OpenAIErrorType;
     param?: string | null;
     code?: string | null;
+    headers?: Record<string, string>;
   } = {},
 ): HttpError {
   return new HttpError(status, message, {
     type: opts.type ?? mapStatusToType(status),
     param: opts.param ?? null,
     code: opts.code ?? mapStatusToCode(status),
+    headers: opts.headers,
   });
 }
 
 function extractMessage(body: unknown): string | null {
   if (!body || typeof body !== "object") {
     if (typeof body === "string" && body.trim()) {
-      const t = body.trim();
-      // Bound plain-text passthrough; drop HTML/multi-line CDN pages.
-      if (t.length > 500 || t.includes("<") || /[\r\n]/.test(t)) return null;
-      return t;
+      return sanitizeErrorText(body);
     }
     return null;
   }
   const o = body as Record<string, unknown>;
-  if (typeof o.message === "string" && o.message) return o.message;
+  if (typeof o.message === "string" && o.message) {
+    return sanitizeErrorText(o.message);
+  }
   if (o.error && typeof o.error === "object") {
     const e = o.error as Record<string, unknown>;
-    if (typeof e.message === "string" && e.message) return e.message;
+    if (typeof e.message === "string" && e.message) {
+      return sanitizeErrorText(e.message);
+    }
   }
-  if (typeof o.detail === "string" && o.detail) return o.detail;
-  if (typeof o.details === "string" && o.details) return o.details;
+  if (typeof o.detail === "string" && o.detail) {
+    return sanitizeErrorText(o.detail);
+  }
+  if (typeof o.details === "string" && o.details) {
+    return sanitizeErrorText(o.details);
+  }
   return null;
 }
 
 function extractCode(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
   const o = body as Record<string, unknown>;
-  if (typeof o.code === "string") return o.code;
+  if (typeof o.code === "string") return sanitizeErrorCode(o.code);
   if (o.error && typeof o.error === "object") {
     const e = o.error as Record<string, unknown>;
-    if (typeof e.code === "string") return e.code;
+    if (typeof e.code === "string") return sanitizeErrorCode(e.code);
   }
   return null;
 }
