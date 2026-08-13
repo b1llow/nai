@@ -56,6 +56,8 @@ export function timingSafeEqual(a: string, b: string): boolean {
 export function isSameOriginRequest(request: Request): boolean {
   const url = new URL(request.url);
   const origin = request.headers.get("Origin");
+  // Opaque documents (sandboxed iframe / some in-app browsers) send `Origin: null`.
+  if (origin === "null") return true;
   if (origin) {
     try {
       return new URL(origin).origin === url.origin;

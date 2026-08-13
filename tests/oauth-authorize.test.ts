@@ -101,6 +101,20 @@ describe("OAuth consent", () => {
     expect(html).not.toMatch(/<script/i);
   });
 
+  it("allows Cloudflare challenge scripts and does not set form-action", async () => {
+    const env = testEnv({ OAUTH_PROVIDER: mockProvider() });
+    const res = await handleAuthorize(
+      new Request(`${ORIGIN}/authorize?client_id=chatgpt-client`),
+      env,
+      testExecutionContext(),
+    );
+    const csp = res.headers.get("Content-Security-Policy") ?? "";
+    expect(csp).toMatch(/script-src 'self'/);
+    expect(csp).toMatch(/connect-src 'self'/);
+    expect(csp).not.toMatch(/script-src 'none'/);
+    expect(csp).not.toMatch(/form-action/);
+  });
+
   it("labels an unnamed client without assuming ChatGPT", async () => {
     const env = testEnv({
       OAUTH_PROVIDER: mockProvider({
@@ -219,6 +233,28 @@ describe("OAuth consent", () => {
     );
     expect(res.status).toBe(400);
     expect(complete).not.toHaveBeenCalled();
+  });
+
+  it("accepts Origin null from opaque documents", async () => {
+    const spy = vi.spyOn(account, "getSubscription").mockResolvedValue({
+      tier: "opus",
+    });
+    const { env, consentId, csrf, complete } = await startConsent();
+    const res = await handleAuthorize(
+      new Request(`${ORIGIN}/authorize`, {
+        method: "POST",
+        headers: {
+          Origin: "null",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: approveBody(consentId, csrf),
+      }),
+      env,
+      testExecutionContext(),
+    );
+    spy.mockRestore();
+    expect(res.status).toBe(302);
+    expect(complete).toHaveBeenCalledOnce();
   });
 
   it("rejects a bad NovelAI token without completing authorization", async () => {
