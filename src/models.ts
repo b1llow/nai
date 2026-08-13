@@ -88,13 +88,13 @@ export async function fetchModels(
 }
 
 export async function listModels(c: Context<AppEnv>) {
-  const auth = c.get("auth") as string;
+  const auth = c.get("auth");
   const data = await fetchModels(c.env, auth, c.req.raw.signal);
   return c.json({ object: "list", data });
 }
 
 export async function getModel(c: Context<AppEnv>) {
-  const auth = c.get("auth") as string;
+  const auth = c.get("auth");
   const id = c.req.param("id") ?? "";
   if (!id || id.length > MAX_MODEL_LEN) {
     throw openaiError(404, "The model does not exist", {

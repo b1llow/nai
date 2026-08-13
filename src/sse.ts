@@ -22,6 +22,15 @@ export function formatSseEvent(event: string, obj: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(obj)}\n\n`;
 }
 
+export function asJsonObject(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 /**
  * Parse an SSE byte stream into JSON objects.
  * Buffers incomplete lines across chunks; joins multi-line `data:` fields;
@@ -29,7 +38,7 @@ export function formatSseEvent(event: string, obj: unknown): string {
  */
 export async function* parseSseJson(
   stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<any> {
+): AsyncGenerator<unknown> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -37,7 +46,7 @@ export async function* parseSseJson(
   let dataChars = 0;
   let totalBytes = 0;
 
-  const flushEvent = function* (): Generator<any> {
+  const flushEvent = function* (): Generator<unknown> {
     if (dataLines.length === 0) return;
     const raw = dataLines.join("\n");
     dataLines = [];
@@ -257,7 +266,9 @@ export async function aggregateChatStream(
 
   try {
     for await (const raw of parseSseJson(upstream.body)) {
-      const chunk = stripNaiFields(raw as Record<string, unknown>);
+      const rec = asJsonObject(raw);
+      if (!rec) continue;
+      const chunk = stripNaiFields(rec);
       if (typeof chunk.id === "string") id = chunk.id;
       if (typeof chunk.model === "string") model = chunk.model;
       if (typeof chunk.created === "number") created = chunk.created;

@@ -3,7 +3,9 @@ import type { Env } from "./env";
 import type { AppEnv } from "./types";
 import { mapNaiError, openaiError, type HttpError } from "./errors";
 import { normalizeMessages } from "./content";
+import { ctxWaitUntil, retainPromise } from "./ctx";
 import {
+  MAX_CHAT_JSON_BYTES,
   MAX_LOGIT_BIAS_KEYS,
   MAX_MODEL_LEN,
   MAX_PREFIX_LEN,
@@ -14,6 +16,7 @@ import {
 } from "./limits";
 import {
   aggregateChatStream,
+  asJsonObject,
   formatSseData,
   parseSseJson,
   stripNaiFields,
@@ -21,7 +24,7 @@ import {
   SseLimitError,
   type ChatCompletion,
 } from "./sse";
-import { NAI_OA, naiFetch, throwMappedUpstreamError } from "./upstream";
+import { NAI_OA, naiFetch, readBodyCapped, throwMappedUpstreamError } from "./upstream";
 
 const PASS_THROUGH_KEYS = [
   "temperature",
@@ -338,10 +341,7 @@ export async function runChatCompletion(
     await throwMappedUpstreamError(res);
   }
 
-  const id =
-    typeof crypto !== "undefined" && crypto.randomUUID
-      ? `chatcmpl-${crypto.randomUUID().replace(/-/g, "")}`
-      : `chatcmpl-${Date.now()}`;
+  const id = `chatcmpl-${crypto.randomUUID().replace(/-/g, "")}`;
   const created = Math.floor(Date.now() / 1000);
   const model = chatBody.model;
 
@@ -356,7 +356,29 @@ export async function runChatCompletion(
 
   if (ct.includes("application/json")) {
     // Unexpected non-stream success — try to coerce
-    const data = (await res.json()) as Record<string, unknown>;
+    const { text, truncated } = await readBodyCapped(res, MAX_CHAT_JSON_BYTES);
+    if (truncated) {
+      throw openaiError(502, "unexpected non-stream upstream response", {
+        type: "api_error",
+        code: "upstream_error",
+      });
+    }
+    let parsed: unknown;
+    try {
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      throw openaiError(502, "unexpected non-stream upstream response", {
+        type: "api_error",
+        code: "upstream_error",
+      });
+    }
+    const data = asJsonObject(parsed);
+    if (!data) {
+      throw openaiError(502, "unexpected non-stream upstream response", {
+        type: "api_error",
+        code: "upstream_error",
+      });
+    }
     if (data.error) {
       throw mapNaiError(502, data, res.headers);
     }
@@ -421,6 +443,8 @@ export type PipeChatStreamOpts = {
   upstreamAbort?: AbortController;
   /** Called when the pipe finishes (success, error, or abort). */
   onDone?: () => void;
+  /** Keep the pump alive for the Worker invocation (Node tests omit this). */
+  waitUntil?: (promise: Promise<unknown>) => void;
 };
 
 /** Pipe upstream SSE → client SSE, stripping NAI fields. */
@@ -450,7 +474,7 @@ export function pipeChatStream(
   };
   clientSignal?.addEventListener("abort", abort, { once: true });
 
-  (async () => {
+  const pump = (async () => {
     let wroteDone = false;
     try {
       if (!upstream.body) {
@@ -461,10 +485,9 @@ export function pipeChatStream(
       }
       for await (const raw of parseSseJson(upstream.body)) {
         if (clientSignal?.aborted) break;
-        const chunk = stripNaiFields(raw as Record<string, unknown>) as Record<
-          string,
-          unknown
-        >;
+        const rec = asJsonObject(raw);
+        if (!rec) continue;
+        const chunk = stripNaiFields(rec);
         if (typeof chunk.object !== "string") {
           chunk.object = "chat.completion.chunk";
         }
@@ -519,6 +542,7 @@ export function pipeChatStream(
       }
     }
   })();
+  retainPromise(opts?.waitUntil, pump);
 
   return new Response(readable, {
     status: 200,
@@ -531,7 +555,7 @@ export function pipeChatStream(
 }
 
 export async function handleChatCompletions(c: Context<AppEnv>) {
-  const auth = c.get("auth") as string;
+  const auth = c.get("auth");
   let raw: unknown;
   try {
     raw = await c.req.json();
@@ -570,6 +594,7 @@ export async function handleChatCompletions(c: Context<AppEnv>) {
         clientSignal: c.req.raw.signal,
         upstreamAbort: ac,
         onDone: detach,
+        waitUntil: (p) => ctxWaitUntil(c, p),
       },
     );
   } catch (err) {

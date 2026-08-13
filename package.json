@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types --strict-vars false",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -15,7 +16,7 @@
     "hono": "^4.13.1"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260424.1",
+    "@types/node": "^26.2.0",
     "typescript": "^5.8.0",
     "vitest": "^3.0.0",
     "wrangler": "4.84.1"

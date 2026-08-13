@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import type { AppEnv } from "./types";
+import { ctxWaitUntil, retainPromise } from "./ctx";
 import { openaiError } from "./errors";
 import { assertMessagesBudget, flattenContent, normalizeRole } from "./content";
 import {
@@ -10,6 +11,7 @@ import {
   formatSseEvent,
   parseSseJson,
   stripNaiFields,
+  asJsonObject,
   SseLimitError,
   type ChatCompletion,
 } from "./sse";
@@ -24,11 +26,7 @@ import {
 } from "./limits";
 
 function rid(prefix: string): string {
-  const hex =
-    typeof crypto !== "undefined" && crypto.randomUUID
-      ? crypto.randomUUID().replace(/-/g, "")
-      : `${Date.now()}${Math.random().toString(16).slice(2)}`;
-  return `${prefix}_${hex}`;
+  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
 }
 
 export function responsesInputToMessages(raw: unknown): {
@@ -305,7 +303,7 @@ export function buildResponseObject(opts: {
 }
 
 export async function handleResponses(c: Context<AppEnv>) {
-  const auth = c.get("auth") as string;
+  const auth = c.get("auth");
   let raw: unknown;
   try {
     raw = await c.req.json();
@@ -386,6 +384,7 @@ export async function handleResponses(c: Context<AppEnv>) {
         clientSignal: c.req.raw.signal,
         upstreamAbort: ac,
         onDone: detach,
+        waitUntil: (p) => ctxWaitUntil(c, p),
       });
     }
 
@@ -398,6 +397,7 @@ export async function handleResponses(c: Context<AppEnv>) {
       clientSignal: c.req.raw.signal,
       upstreamAbort: ac,
       onDone: detach,
+      waitUntil: (p) => ctxWaitUntil(c, p),
     });
   } catch (err) {
     detach();
@@ -419,6 +419,7 @@ export function streamResponsesFromText(opts: {
   clientSignal?: AbortSignal;
   upstreamAbort?: AbortController;
   onDone?: () => void;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Response {
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
@@ -439,7 +440,7 @@ export function streamResponsesFromText(opts: {
   };
   opts.clientSignal?.addEventListener("abort", abort, { once: true });
 
-  (async () => {
+  const pump = (async () => {
     try {
       const base = buildResponseObject({
         id: opts.responseId,
@@ -599,6 +600,7 @@ export function streamResponsesFromText(opts: {
       }
     }
   })();
+  retainPromise(opts.waitUntil, pump);
 
   return new Response(readable, {
     status: 200,
@@ -619,6 +621,7 @@ export function streamResponsesFromChat(opts: {
   clientSignal?: AbortSignal;
   upstreamAbort?: AbortController;
   onDone?: () => void;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Response {
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
@@ -639,7 +642,7 @@ export function streamResponsesFromChat(opts: {
   };
   opts.clientSignal?.addEventListener("abort", abort, { once: true });
 
-  (async () => {
+  const pump = (async () => {
     let fullText = "";
     let usage: ChatCompletion["usage"] | null = null;
     let model = opts.model;
@@ -708,7 +711,9 @@ export function streamResponsesFromChat(opts: {
         try {
           for await (const raw of parseSseJson(opts.upstream.body)) {
             if (opts.clientSignal?.aborted) break;
-            const chunk = stripNaiFields(raw as Record<string, unknown>);
+            const rec = asJsonObject(raw);
+            if (!rec) continue;
+            const chunk = stripNaiFields(rec);
             if (typeof chunk.model === "string") model = chunk.model;
             if (chunk.usage && typeof chunk.usage === "object") {
               const u = chunk.usage as Record<string, unknown>;
@@ -885,6 +890,7 @@ export function streamResponsesFromChat(opts: {
       }
     }
   })();
+  retainPromise(opts.waitUntil, pump);
 
   return new Response(readable, {
     status: 200,
