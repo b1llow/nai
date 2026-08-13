@@ -60,15 +60,15 @@ export async function* parseSseJson(
         throw new SseLimitError();
       }
       buffer += decoder.decode(value, { stream: true });
-      if (buffer.length > MAX_SSE_LINE_BUFFER) {
-        throw new SseLimitError();
-      }
 
       let nl: number;
       while ((nl = buffer.indexOf("\n")) !== -1) {
         let line = buffer.slice(0, nl);
         buffer = buffer.slice(nl + 1);
         if (line.endsWith("\r")) line = line.slice(0, -1);
+        if (line.length > MAX_SSE_LINE_BUFFER) {
+          throw new SseLimitError();
+        }
 
         if (line === "") {
           yield* flushEvent();
@@ -88,8 +88,14 @@ export async function* parseSseJson(
         }
         // ignore event:/id:/retry: for chat upstream
       }
+      if (buffer.length > MAX_SSE_LINE_BUFFER) {
+        throw new SseLimitError();
+      }
     }
     buffer += decoder.decode();
+    if (buffer.length > MAX_SSE_LINE_BUFFER) {
+      throw new SseLimitError();
+    }
     if (buffer.length) {
       let line = buffer;
       if (line.endsWith("\r")) line = line.slice(0, -1);

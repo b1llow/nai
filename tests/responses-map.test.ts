@@ -223,4 +223,34 @@ describe("responses stream helpers", () => {
     expect(obj.incomplete_details).toEqual({ reason: "max_output_tokens" });
     expect(obj.output[0]!.status).toBe("incomplete");
   });
+
+  it("marks upstream max_tokens finish as incomplete", async () => {
+    const sse =
+      'data: {"choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}\n\n' +
+      "data: [DONE]\n\n";
+    const res = streamResponsesFromChat({
+      upstream: new Response(sse, {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+      responseId: "resp_len",
+      messageId: "msg_len",
+      created_at: 1,
+      model: "m",
+    });
+    const types: string[] = [];
+    let terminal: Record<string, unknown> | null = null;
+    for await (const obj of parseSseJson(res.body!)) {
+      const rec = obj as Record<string, unknown>;
+      types.push(String(rec.type));
+      if (rec.type === "response.incomplete") {
+        terminal = rec.response as Record<string, unknown>;
+      }
+    }
+    expect(types[types.length - 1]).toBe("response.incomplete");
+    expect(terminal?.status).toBe("incomplete");
+    expect(terminal?.incomplete_details).toEqual({
+      reason: "max_output_tokens",
+    });
+  });
 });

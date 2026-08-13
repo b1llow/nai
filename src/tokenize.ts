@@ -42,12 +42,7 @@ export function sanitizeTokenCountResponse(
 
   takeNumber("token_count");
   takeNumber("count");
-  if (typeof o.tokens === "number" && Number.isFinite(o.tokens) && o.tokens >= 0) {
-    out.tokens = o.tokens;
-  }
-  if (typeof o.model === "string" && o.model && o.model.length <= MAX_MODEL_LEN) {
-    out.model = o.model;
-  }
+  takeNumber("tokens");
 
   if (
     typeof out.token_count !== "number" &&

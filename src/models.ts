@@ -2,8 +2,8 @@ import type { Context } from "hono";
 import type { Env } from "./env";
 import type { AppEnv } from "./types";
 import { HttpError, openaiError } from "./errors";
-import { NAI_OA, naiFetch, throwMappedUpstreamError } from "./upstream";
-import { MAX_MODEL_LEN, safeIdent } from "./limits";
+import { NAI_OA, naiFetch, readBodyCapped, throwMappedUpstreamError } from "./upstream";
+import { MAX_MODEL_LEN, MAX_MODELS_RESPONSE_BYTES, safeIdent } from "./limits";
 
 export const FALLBACK_MODELS = [
   {
@@ -61,8 +61,11 @@ export async function fetchModels(
       }
       return FALLBACK_MODELS.slice();
     }
-    const text = await res.text();
-    if (text.length > 256_000) return FALLBACK_MODELS.slice();
+    const { text, truncated } = await readBodyCapped(
+      res,
+      MAX_MODELS_RESPONSE_BYTES,
+    );
+    if (truncated) return FALLBACK_MODELS.slice();
     let body: { data?: unknown };
     try {
       body = JSON.parse(text) as { data?: unknown };

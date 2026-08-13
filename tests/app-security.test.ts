@@ -46,4 +46,66 @@ describe("app security gates", () => {
     const res = await app.request("/health", {}, env);
     expect(res.status).toBe(200);
   });
+
+  it("returns 429 with Retry-After when the limiter denies", async () => {
+    const res = await app.request(
+      "/v1/models",
+      {
+        headers: {
+          Authorization: "Bearer faketoken",
+          "cf-connecting-ip": "203.0.113.9",
+        },
+      },
+      {
+        ...env,
+        API_RATE_LIMIT: { limit: async () => ({ success: false }) },
+      },
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Retry-After")).toBe("60");
+    const json = (await res.json()) as { error?: { type?: string } };
+    expect(json.error?.type).toBe("rate_limit_error");
+  });
+
+  it("does not call the limiter for CORS preflight", async () => {
+    let called = 0;
+    const res = await app.request(
+      "/v1/chat/completions",
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://example.com",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "authorization",
+        },
+      },
+      {
+        ...env,
+        API_RATE_LIMIT: {
+          limit: async () => {
+            called += 1;
+            return { success: false };
+          },
+        },
+      },
+    );
+    expect(called).toBe(0);
+    expect(res.status).toBeLessThan(400);
+  });
+
+  it("fails open when the limiter throws", async () => {
+    const res = await app.request(
+      "/v1/models",
+      {},
+      {
+        ...env,
+        API_RATE_LIMIT: {
+          limit: async () => {
+            throw new Error("platform");
+          },
+        },
+      },
+    );
+    expect(res.status).toBe(401);
+  });
 });

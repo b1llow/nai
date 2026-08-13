@@ -726,9 +726,9 @@ export function streamResponsesFromChat(opts: {
             const choices = chunk.choices as
               | Array<Record<string, unknown>>
               | undefined;
-            const delta = choices?.[0]?.delta as
-              | Record<string, unknown>
-              | undefined;
+            const c0 = choices?.[0];
+            if (c0 && c0.finish_reason === "length") truncated = true;
+            const delta = c0?.delta as Record<string, unknown> | undefined;
             const content =
               delta && typeof delta.content === "string" ? delta.content : "";
             if (!content) continue;

@@ -134,6 +134,23 @@ describe("parseSseJson limits", () => {
       }
     }).rejects.toBeInstanceOf(SseLimitError);
   });
+
+  it("accepts a large chunk of many small complete events", async () => {
+    const event = 'data: {"a":1}\n\n';
+    const body = event.repeat(20_000); // ~320 KiB of complete events
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(body));
+        controller.close();
+      },
+    });
+    let count = 0;
+    for await (const obj of parseSseJson(stream)) {
+      expect(obj).toEqual({ a: 1 });
+      count++;
+    }
+    expect(count).toBe(20_000);
+  });
 });
 
 describe("sanitizeTokenCountResponse", () => {
@@ -143,8 +160,13 @@ describe("sanitizeTokenCountResponse", () => {
         token_count: 12,
         prompt: "secret",
         tokens: [1, 2, 3],
+        model: "xialong-v1",
       }),
     ).toEqual({ token_count: 12 });
+  });
+
+  it("applies the same numeric bound to the tokens alias", () => {
+    expect(() => sanitizeTokenCountResponse({ tokens: 1e300 })).toThrow(HttpError);
   });
 
   it("rejects payloads without a count", () => {

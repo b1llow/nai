@@ -21,6 +21,7 @@ export const MAX_SSE_EVENT_CHARS = 256 * 1024;
 export const MAX_SSE_STREAM_BYTES = 4 * 1024 * 1024;
 export const MAX_COMPLETION_CHARS = 512 * 1024;
 export const MAX_TOKENIZE_RESPONSE_BYTES = 16_384;
+export const MAX_MODELS_RESPONSE_BYTES = 256_000;
 export const RATE_LIMIT_PER_MINUTE = 120;
 
 const ALLOWED_NAI_HOSTS = new Set(["text.novelai.net", "api.novelai.net"]);
