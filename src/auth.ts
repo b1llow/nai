@@ -30,3 +30,26 @@ export function parseAuthorization(header: string | undefined): string {
   }
   return `Bearer ${token}`;
 }
+
+/**
+ * MCP auth: request Bearer header wins; otherwise the optional Worker secret.
+ * A present but malformed header is rejected. A malformed secret is a
+ * server misconfiguration (do not fall through).
+ */
+export function resolveMcpAuthorization(
+  header: string | undefined,
+  secret: string | undefined,
+): string | null {
+  const raw = (header ?? "").trim();
+  if (raw) return parseAuthorization(header);
+  const token = (secret ?? "").trim();
+  if (!token) return null;
+  try {
+    return parseAuthorization(`Bearer ${token}`);
+  } catch {
+    throw openaiError(500, "Server misconfigured", {
+      type: "api_error",
+      code: "internal_error",
+    });
+  }
+}

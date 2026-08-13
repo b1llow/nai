@@ -112,6 +112,18 @@ export function openaiError(
   });
 }
 
+export function httpErrorToResponse(err: HttpError): Response {
+  return new Response(JSON.stringify(err.toJSON()), {
+    status: err.status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "private, no-store",
+      "X-Content-Type-Options": "nosniff",
+      ...err.headers,
+    },
+  });
+}
+
 function extractMessage(body: unknown): string | null {
   if (!body || typeof body !== "object") {
     if (typeof body === "string" && body.trim()) {

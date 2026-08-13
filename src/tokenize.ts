@@ -1,5 +1,6 @@
 import type { Context } from "hono";
 import type { AppEnv } from "./types";
+import type { Env } from "./env";
 import { openaiError } from "./errors";
 import { normalizeMessages } from "./content";
 import { NAI_OA, naiFetch, readBodyCapped, throwMappedUpstreamError } from "./upstream";
@@ -66,22 +67,12 @@ export function sanitizeTokenCountResponse(
   return out;
 }
 
-export async function handleTokenCount(c: Context<AppEnv>) {
-  const auth = c.get("auth");
-  let raw: unknown;
-  try {
-    raw = await c.req.json();
-  } catch {
-    throw openaiError(400, "invalid JSON body", {
-      type: "invalid_request_error",
-    });
-  }
-  if (!raw || typeof raw !== "object") {
-    throw openaiError(400, "request body must be a JSON object", {
-      type: "invalid_request_error",
-    });
-  }
-  const req = raw as Record<string, unknown>;
+export async function runTokenCount(
+  env: Env,
+  auth: string,
+  req: { model: string; prompt?: string; messages?: unknown },
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>> {
   if (typeof req.model !== "string" || !req.model) {
     throw openaiError(400, "model is required", {
       type: "invalid_request_error",
@@ -120,11 +111,11 @@ export async function handleTokenCount(c: Context<AppEnv>) {
     });
   }
 
-  const res = await naiFetch(c.env, NAI_OA.tokenCount, {
+  const res = await naiFetch(env, NAI_OA.tokenCount, {
     method: "POST",
     auth,
     body: { model: req.model, prompt },
-    signal: c.req.raw.signal,
+    signal,
   });
   if (!res.ok) await throwMappedUpstreamError(res);
   const { text, truncated } = await readBodyCapped(
@@ -146,5 +137,35 @@ export async function handleTokenCount(c: Context<AppEnv>) {
       code: "upstream_error",
     });
   }
-  return c.json(sanitizeTokenCountResponse(data));
+  return sanitizeTokenCountResponse(data);
+}
+
+export async function handleTokenCount(c: Context<AppEnv>) {
+  const auth = c.get("auth");
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    throw openaiError(400, "invalid JSON body", {
+      type: "invalid_request_error",
+    });
+  }
+  if (!raw || typeof raw !== "object") {
+    throw openaiError(400, "request body must be a JSON object", {
+      type: "invalid_request_error",
+    });
+  }
+  const req = raw as Record<string, unknown>;
+  return c.json(
+    await runTokenCount(
+      c.env,
+      auth,
+      {
+        model: typeof req.model === "string" ? req.model : "",
+        prompt: typeof req.prompt === "string" ? req.prompt : undefined,
+        messages: req.messages,
+      },
+      c.req.raw.signal,
+    ),
+  );
 }
