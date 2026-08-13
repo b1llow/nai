@@ -80,10 +80,11 @@ const IMAGE_PATHS = new Set([
   "/ai/augment-image",
   "/ai/encode-vibe",
   "/ai/generate-image/suggest-tags",
-]);
-const API_PATHS = new Set([
+  // NovelAI moved account GETs off api.novelai.net (400: "update to the image URL").
   "/user/subscription",
   "/user/information",
+]);
+const API_PATHS = new Set([
   "/ai/generate-voice",
   "/ai/upscale",
   "/ai/annotate-image",

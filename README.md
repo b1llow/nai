@@ -101,7 +101,7 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_generate_text` | `text.novelai.net` `/ai/generate` |
 | `nai_tokenize` | `/oa/v1/internal/token-count` |
 | `nai_generate_voice` | `/ai/generate-voice` |
-| `nai_subscription` | `/user/subscription` |
+| `nai_subscription` | `image.novelai.net` `/user/subscription` |
 | `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
 
 Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`.
@@ -274,8 +274,8 @@ Client (OpenAI SDK / ST / curl / MCP / ChatGPT)
      /authorize  consent (Persistent API token → encrypted grant props)
         │
         ├── text.novelai.net   /oa/v1/*  /ai/generate
-        ├── image.novelai.net  /ai/generate-image  /ai/augment-image  /ai/encode-vibe
-        └── api.novelai.net    /user/subscription  /ai/upscale  /ai/generate-voice
+        ├── image.novelai.net  /ai/generate-image  /ai/augment-image  /user/subscription
+        └── api.novelai.net    /ai/upscale  /ai/generate-voice
 ```
 
 | Area | Module |
@@ -300,8 +300,8 @@ Chat and Responses always request `stream: true` from NovelAI. Non-stream client
 | Binding | Required | Description |
 |---------|----------|-------------|
 | `NAI_BASE_URL` | yes | NovelAI text API origin. Must be `https://text.novelai.net` or `https://api.novelai.net` (default: `https://text.novelai.net`) |
-| `NAI_IMAGE_BASE_URL` | yes | Image API origin. Must be `https://image.novelai.net` |
-| `NAI_API_BASE_URL` | yes | Account / upscale / TTS origin. Must be `https://api.novelai.net` |
+| `NAI_IMAGE_BASE_URL` | yes | Image API origin (also `/user/subscription` and `/user/information`). Must be `https://image.novelai.net` |
+| `NAI_API_BASE_URL` | yes | Upscale / TTS origin. Must be `https://api.novelai.net` |
 | `NAI_ALLOW_UNSAFE_BASE_URL` | no | Set to `1` only for local mocks; skips the host allowlist but still requires `http(s)` and rejects URLs with credentials |
 | `OAUTH_KV` | yes (MCP OAuth) | Workers KV for OAuth clients, grants, and short-lived consent sessions. NovelAI tokens in grants are encrypted by `workers-oauth-provider`. |
 | `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` and `/mcp` |
