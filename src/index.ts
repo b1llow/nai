@@ -1,8 +1,9 @@
 import type { Env } from "./env";
-import app from "./app";
 import { unhandledToResponse } from "./errors";
 import { requestPath } from "./log";
-import { handleMcp } from "./mcp/server";
+import { createNaiOAuthProvider } from "./oauth/provider";
+
+const oauth = createNaiOAuthProvider();
 
 export default {
   async fetch(
@@ -11,11 +12,7 @@ export default {
     ctx: ExecutionContext,
   ): Promise<Response> {
     try {
-      const url = new URL(request.url);
-      if (url.pathname === "/mcp") {
-        return await handleMcp(request, env, ctx);
-      }
-      return await app.fetch(request, env, ctx);
+      return await oauth.fetch(request, env, ctx);
     } catch (err) {
       return unhandledToResponse(err, requestPath(request));
     }

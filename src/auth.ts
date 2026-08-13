@@ -43,3 +43,12 @@ export function resolveMcpAuthorization(
   if (!raw) return null;
   return parseAuthorization(header);
 }
+
+/**
+ * Consent-form input: a Persistent API token, with or without a Bearer prefix.
+ */
+export function parsePastedNaiToken(raw: string): string {
+  const trimmed = raw.trim();
+  if (/^Bearer\s+/i.test(trimmed)) return parseAuthorization(trimmed);
+  return parseAuthorization(`Bearer ${trimmed}`);
+}

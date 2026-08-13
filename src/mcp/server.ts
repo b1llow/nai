@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import type { Env } from "../env";
 import { resolveMcpAuthorization } from "../auth";
+import { naiAuthFromProps } from "../oauth/props";
 import { limitRequestBody } from "../body-limit";
 import { unhandledToResponse } from "../errors";
 import { MAX_MCP_BODY_BYTES, MCP_CUSTOM_DOMAIN } from "../limits";
@@ -47,9 +48,9 @@ export async function handleMcp(
       inbound = await limitRequestBody(inbound, MAX_MCP_BODY_BYTES);
     }
 
-    const auth = resolveMcpAuthorization(
-      inbound.headers.get("Authorization") ?? undefined,
-    );
+    const auth =
+      naiAuthFromProps(ctx.props) ??
+      resolveMcpAuthorization(inbound.headers.get("Authorization") ?? undefined);
 
     const response = await createMcpHandler(() => createNaiMcpServer(env, auth), {
       route: "/mcp",

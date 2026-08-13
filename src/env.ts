@@ -1,3 +1,4 @@
+import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { openaiError } from "./errors";
 import { isAllowedNaiHost, type NaiHostKind } from "./limits";
 
@@ -7,10 +8,13 @@ import { isAllowedNaiHost, type NaiHostKind } from "./limits";
  *
  * `API_RATE_LIMIT` is optional at the type level because the Worker fail-opens
  * when the binding is missing (tests and platform outages).
+ *
+ * `OAUTH_PROVIDER` is injected at runtime by `@cloudflare/workers-oauth-provider`.
  */
 export type Env = Omit<Cloudflare.Env, "API_RATE_LIMIT"> & {
   NAI_ALLOW_UNSAFE_BASE_URL?: string;
   API_RATE_LIMIT?: Cloudflare.Env["API_RATE_LIMIT"];
+  OAUTH_PROVIDER?: OAuthHelpers;
 };
 
 export type NaiUrlEnv = Pick<Env, "NAI_BASE_URL" | "NAI_ALLOW_UNSAFE_BASE_URL"> & {

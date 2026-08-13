@@ -88,6 +88,7 @@ app.get("/", (c) =>
     name: "nai-openai-proxy",
     endpoints: [
       "/mcp",
+      "/authorize",
       "/v1/models",
       "/v1/chat/completions",
       "/v1/responses",
