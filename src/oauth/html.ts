@@ -8,23 +8,39 @@ export function escapeHtml(value: string): string {
     .replace(/'/g, "&#039;");
 }
 
+/**
+ * Consent-page CSP.
+ *
+ * Do not set `form-action`: Chrome applies it to the entire redirect chain
+ * after the POST (chatgpt.com / claude.ai, then sometimes `claude://`).
+ * `form-action 'self'` therefore blocks completing OAuth.
+ *
+ * `script-src 'none'` also breaks Cloudflare managed challenges (`/cdn-cgi/`
+ * and `challenges.cloudflare.com`); CF may inject a nonce which makes `'none'`
+ * ignored and still blocks Zaraz / jsd.
+ */
+export function contentSecurityPolicy(): string {
+  return [
+    "default-src 'none'",
+    "style-src 'unsafe-inline'",
+    "script-src 'self'",
+    "connect-src 'self'",
+    "worker-src 'self'",
+    "img-src 'self' data:",
+    "frame-src https://challenges.cloudflare.com",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+  ].join("; ");
+}
+
 export function securityHeaders(setCookies: string[] = []): Headers {
   const headers = new Headers({
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "private, no-store",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
-    "Content-Security-Policy": [
-      "default-src 'none'",
-      "style-src 'unsafe-inline'",
-      "img-src 'none'",
-      "font-src 'none'",
-      "script-src 'none'",
-      "form-action 'self'",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-    ].join("; "),
+    "Referrer-Policy": "same-origin",
+    "Content-Security-Policy": contentSecurityPolicy(),
   });
   for (const cookie of setCookies) {
     headers.append("Set-Cookie", cookie);
