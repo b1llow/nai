@@ -141,13 +141,11 @@ app.onError((err, c) => {
     }
     return c.json(err.toJSON(), err.status as 400);
   }
-  console.error(
-    JSON.stringify({
-      message: "unhandled error",
-      error: err instanceof Error ? err.message : "non-error thrown",
-      path: c.req.path,
-    }),
-  );
+  console.error({
+    message: "unhandled error",
+    error: err instanceof Error ? err.message : "non-error thrown",
+    path: c.req.path,
+  });
   return c.json(
     {
       error: {
