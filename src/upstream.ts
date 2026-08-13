@@ -1,5 +1,7 @@
 import type { Env } from "./env";
+import { resolveNaiBaseUrl } from "./env";
 import { mapNaiError, openaiError } from "./errors";
+import { MAX_ERROR_BODY_BYTES } from "./limits";
 
 export const NAI_OA = {
   models: "/oa/v1/models",
@@ -16,6 +18,57 @@ function correlationId(): string {
   return out;
 }
 
+async function readBodyCapped(
+  res: Response,
+  maxBytes: number,
+): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const remaining = maxBytes - size;
+      if (remaining <= 0) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        break;
+      }
+      if (value.byteLength > remaining) {
+        chunks.push(value.slice(0, remaining));
+        size += remaining;
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        break;
+      }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* ignore */
+    }
+  }
+  const merged = new Uint8Array(size);
+  let offset = 0;
+  for (const c of chunks) {
+    merged.set(c, offset);
+    offset += c.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
 export async function naiFetch(
   env: Env,
   path: string,
@@ -27,8 +80,14 @@ export async function naiFetch(
     stream?: boolean;
   },
 ): Promise<Response> {
-  const base = env.NAI_BASE_URL.replace(/\/$/, "");
-  const url = `${base}${path.startsWith("/") ? path : `/${path}`}`;
+  if (!path.startsWith("/oa/v1/")) {
+    throw openaiError(500, "Server misconfigured", {
+      type: "api_error",
+      code: "internal_error",
+    });
+  }
+  const base = resolveNaiBaseUrl(env);
+  const url = `${base}${path}`;
   const headers: Record<string, string> = {
     Authorization: init.auth,
     Accept: init.stream ? "text/event-stream" : "application/json",
@@ -62,12 +121,11 @@ export async function throwMappedUpstreamError(res: Response): Promise<never> {
   let body: unknown = null;
   const ct = res.headers.get("content-type") ?? "";
   try {
-    const text = await res.text();
+    const text = await readBodyCapped(res, MAX_ERROR_BODY_BYTES);
     if (text) {
       try {
         body = JSON.parse(text);
       } catch {
-        // Upstream sometimes returns SSE-shaped or plain text errors
         const trimmed = text.trim();
         if (trimmed.startsWith("{")) {
           try {

@@ -3,6 +3,11 @@ import type { AppEnv } from "./types";
 import { openaiError } from "./errors";
 import { normalizeMessages } from "./content";
 import { NAI_OA, naiFetch, throwMappedUpstreamError } from "./upstream";
+import {
+  MAX_MODEL_LEN,
+  MAX_TOKENIZE_RESPONSE_BYTES,
+  MAX_TOTAL_CONTENT_CHARS,
+} from "./limits";
 
 /** Approximate NovelAI/GLM chat template for token-count prompts. */
 function messagesToPrompt(
@@ -14,6 +19,56 @@ function messagesToPrompt(
   }
   prompt += "<|assistant|>\n";
   return prompt;
+}
+
+export function sanitizeTokenCountResponse(
+  data: unknown,
+): Record<string, unknown> {
+  if (!data || typeof data !== "object") {
+    throw openaiError(502, "unexpected upstream token-count response", {
+      type: "api_error",
+      code: "upstream_error",
+    });
+  }
+  const o = data as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+
+  const takeNumber = (key: string) => {
+    const v = o[key];
+    if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 1e9) {
+      out[key] = v;
+    }
+  };
+
+  takeNumber("token_count");
+  takeNumber("count");
+  if (typeof o.tokens === "number" && Number.isFinite(o.tokens) && o.tokens >= 0) {
+    out.tokens = o.tokens;
+  }
+  if (typeof o.model === "string" && o.model && o.model.length <= MAX_MODEL_LEN) {
+    out.model = o.model;
+  }
+
+  if (
+    typeof out.token_count !== "number" &&
+    typeof out.tokens === "number"
+  ) {
+    out.token_count = out.tokens;
+  }
+  if (
+    typeof out.token_count !== "number" &&
+    typeof out.count === "number"
+  ) {
+    out.token_count = out.count;
+  }
+
+  if (typeof out.token_count !== "number") {
+    throw openaiError(502, "unexpected upstream token-count response", {
+      type: "api_error",
+      code: "upstream_error",
+    });
+  }
+  return out;
 }
 
 export async function handleTokenCount(c: Context<AppEnv>) {
@@ -38,13 +93,31 @@ export async function handleTokenCount(c: Context<AppEnv>) {
       param: "model",
     });
   }
+  if (req.model.length > MAX_MODEL_LEN) {
+    throw openaiError(400, "model is too long", {
+      type: "invalid_request_error",
+      param: "model",
+    });
+  }
 
   let prompt: string;
   if (typeof req.prompt === "string") {
+    if (req.prompt.length > MAX_TOTAL_CONTENT_CHARS) {
+      throw openaiError(400, "prompt is too long", {
+        type: "invalid_request_error",
+        param: "prompt",
+      });
+    }
     prompt = req.prompt;
   } else if (Array.isArray(req.messages)) {
     const msgs = normalizeMessages(req.messages, "messages");
     prompt = messagesToPrompt(msgs);
+    if (prompt.length > MAX_TOTAL_CONTENT_CHARS) {
+      throw openaiError(400, "messages content is too long", {
+        type: "invalid_request_error",
+        param: "messages",
+      });
+    }
   } else {
     throw openaiError(400, "prompt or messages is required", {
       type: "invalid_request_error",
@@ -59,6 +132,21 @@ export async function handleTokenCount(c: Context<AppEnv>) {
     signal: c.req.raw.signal,
   });
   if (!res.ok) await throwMappedUpstreamError(res);
-  const data = await res.json();
-  return c.json(data);
+  const text = await res.text();
+  if (text.length > MAX_TOKENIZE_RESPONSE_BYTES) {
+    throw openaiError(502, "unexpected upstream token-count response", {
+      type: "api_error",
+      code: "upstream_error",
+    });
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw openaiError(502, "unexpected upstream token-count response", {
+      type: "api_error",
+      code: "upstream_error",
+    });
+  }
+  return c.json(sanitizeTokenCountResponse(data));
 }

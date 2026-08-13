@@ -4,11 +4,21 @@ import type { AppEnv } from "./types";
 import { mapNaiError, openaiError, type HttpError } from "./errors";
 import { normalizeMessages } from "./content";
 import {
+  MAX_LOGIT_BIAS_KEYS,
+  MAX_MODEL_LEN,
+  MAX_PREFIX_LEN,
+  MAX_STOP_LEN,
+  MAX_STOP_STRINGS,
+  MAX_TOKENS,
+  MAX_USER_LEN,
+} from "./limits";
+import {
   aggregateChatStream,
   formatSseData,
   parseSseJson,
   stripNaiFields,
   SSE_DONE,
+  SseLimitError,
   type ChatCompletion,
 } from "./sse";
 import { NAI_OA, naiFetch, throwMappedUpstreamError } from "./upstream";
@@ -72,6 +82,12 @@ export function sanitizeChatBody(raw: unknown): {
       param: "model",
     });
   }
+  if (req.model.length > MAX_MODEL_LEN) {
+    throw openaiError(400, "model is too long", {
+      type: "invalid_request_error",
+      param: "model",
+    });
+  }
 
   // Allow empty tools/functions arrays (common client default); reject non-empty.
   if (
@@ -103,7 +119,10 @@ export function sanitizeChatBody(raw: unknown): {
   };
 
   for (const key of PASS_THROUGH_KEYS) {
-    if (req[key] !== undefined) body[key] = req[key];
+    if (req[key] !== undefined) {
+      const value = sanitizePassThrough(key, req[key]);
+      if (value !== undefined) body[key] = value;
+    }
   }
 
   // Explicitly ensure dropped keys are not present
@@ -112,6 +131,173 @@ export function sanitizeChatBody(raw: unknown): {
   }
 
   return { body, stream };
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n));
+}
+
+function sanitizePassThrough(
+  key: (typeof PASS_THROUGH_KEYS)[number],
+  value: unknown,
+): unknown {
+  switch (key) {
+    case "temperature":
+    case "top_p":
+    case "min_p": {
+      const n = finiteNumber(value);
+      if (n === undefined) {
+        throw openaiError(400, `${key} must be a number`, {
+          type: "invalid_request_error",
+          param: key,
+        });
+      }
+      return clamp(n, 0, key === "temperature" ? 2 : 1);
+    }
+    case "frequency_penalty":
+    case "presence_penalty": {
+      const n = finiteNumber(value);
+      if (n === undefined) {
+        throw openaiError(400, `${key} must be a number`, {
+          type: "invalid_request_error",
+          param: key,
+        });
+      }
+      return clamp(n, -2, 2);
+    }
+    case "top_k":
+    case "seed": {
+      const n = finiteNumber(value);
+      if (n === undefined) {
+        throw openaiError(400, `${key} must be a number`, {
+          type: "invalid_request_error",
+          param: key,
+        });
+      }
+      return Math.trunc(clamp(n, 0, 2_147_483_647));
+    }
+    case "max_tokens": {
+      const n = finiteNumber(value);
+      if (n === undefined) {
+        throw openaiError(400, "max_tokens must be a number", {
+          type: "invalid_request_error",
+          param: "max_tokens",
+        });
+      }
+      return Math.trunc(clamp(n, 1, MAX_TOKENS));
+    }
+    case "unified_linear":
+    case "unified_quadratic":
+    case "unified_cubic": {
+      const n = finiteNumber(value);
+      if (n === undefined) {
+        throw openaiError(400, `${key} must be a number`, {
+          type: "invalid_request_error",
+          param: key,
+        });
+      }
+      return clamp(n, -100, 100);
+    }
+    case "unified_increase_linear_with_entropy":
+    case "enable_thinking":
+    case "logprobs":
+      if (typeof value === "boolean") return value;
+      if (key === "logprobs") {
+        const n = finiteNumber(value);
+        if (n !== undefined) return Math.trunc(clamp(n, 0, 5));
+      }
+      throw openaiError(400, `${key} has an invalid type`, {
+        type: "invalid_request_error",
+        param: key,
+      });
+    case "stop":
+      if (typeof value === "string") {
+        if (value.length > MAX_STOP_LEN) {
+          throw openaiError(400, "stop is too long", {
+            type: "invalid_request_error",
+            param: "stop",
+          });
+        }
+        return value;
+      }
+      if (Array.isArray(value)) {
+        if (value.length > MAX_STOP_STRINGS) {
+          throw openaiError(400, "too many stop sequences", {
+            type: "invalid_request_error",
+            param: "stop",
+          });
+        }
+        return value.map((item) => {
+          if (typeof item !== "string" || item.length > MAX_STOP_LEN) {
+            throw openaiError(400, "invalid stop sequence", {
+              type: "invalid_request_error",
+              param: "stop",
+            });
+          }
+          return item;
+        });
+      }
+      throw openaiError(400, "stop must be a string or array of strings", {
+        type: "invalid_request_error",
+        param: "stop",
+      });
+    case "logit_bias": {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw openaiError(400, "logit_bias must be an object", {
+          type: "invalid_request_error",
+          param: "logit_bias",
+        });
+      }
+      const entries = Object.entries(value as Record<string, unknown>);
+      if (entries.length > MAX_LOGIT_BIAS_KEYS) {
+        throw openaiError(400, "logit_bias has too many keys", {
+          type: "invalid_request_error",
+          param: "logit_bias",
+        });
+      }
+      const out: Record<string, number> = {};
+      for (const [k, v] of entries) {
+        if (k.length > 32) {
+          throw openaiError(400, "logit_bias key is too long", {
+            type: "invalid_request_error",
+            param: "logit_bias",
+          });
+        }
+        const n = finiteNumber(v);
+        if (n === undefined) {
+          throw openaiError(400, "logit_bias values must be numbers", {
+            type: "invalid_request_error",
+            param: "logit_bias",
+          });
+        }
+        out[k] = clamp(n, -100, 100);
+      }
+      return out;
+    }
+    case "user":
+      if (typeof value !== "string" || value.length > MAX_USER_LEN) {
+        throw openaiError(400, "user must be a short string", {
+          type: "invalid_request_error",
+          param: "user",
+        });
+      }
+      return value;
+    case "generation_prefix":
+    case "suffix":
+      if (typeof value !== "string" || value.length > MAX_PREFIX_LEN) {
+        throw openaiError(400, `${key} must be a short string`, {
+          type: "invalid_request_error",
+          param: key,
+        });
+      }
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 export type RunChatOptions = {
@@ -293,6 +479,15 @@ export function pipeChatStream(
       }
       await writer.close();
     } catch (err) {
+      if (err instanceof SseLimitError && !wroteDone) {
+        try {
+          await writer.write(encoder.encode(SSE_DONE));
+          await writer.close();
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
       try {
         await writer.abort(err);
       } catch {
@@ -312,7 +507,7 @@ export function pipeChatStream(
     status: 200,
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "private, no-store",
       Connection: "keep-alive",
     },
   });

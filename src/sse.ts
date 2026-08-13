@@ -1,4 +1,18 @@
+import {
+  MAX_COMPLETION_CHARS,
+  MAX_SSE_EVENT_CHARS,
+  MAX_SSE_LINE_BUFFER,
+  MAX_SSE_STREAM_BYTES,
+} from "./limits";
+
 export const SSE_DONE = "data: [DONE]\n\n";
+
+export class SseLimitError extends Error {
+  constructor(message = "upstream stream exceeded size limits") {
+    super(message);
+    this.name = "SseLimitError";
+  }
+}
 
 export function formatSseData(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
@@ -20,11 +34,14 @@ export async function* parseSseJson(
   const decoder = new TextDecoder();
   let buffer = "";
   let dataLines: string[] = [];
+  let dataChars = 0;
+  let totalBytes = 0;
 
   const flushEvent = function* (): Generator<any> {
     if (dataLines.length === 0) return;
     const raw = dataLines.join("\n");
     dataLines = [];
+    dataChars = 0;
     const trimmed = raw.trim();
     if (!trimmed || trimmed === "[DONE]") return;
     try {
@@ -38,7 +55,14 @@ export async function* parseSseJson(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_SSE_STREAM_BYTES) {
+        throw new SseLimitError();
+      }
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > MAX_SSE_LINE_BUFFER) {
+        throw new SseLimitError();
+      }
 
       let nl: number;
       while ((nl = buffer.indexOf("\n")) !== -1) {
@@ -52,10 +76,13 @@ export async function* parseSseJson(
         }
         if (line.startsWith(":")) continue; // comment
         if (line.startsWith("data:")) {
-          // Accept "data:" and "data: "
           const payload = line.startsWith("data: ")
             ? line.slice(6)
             : line.slice(5);
+          dataChars += payload.length + 1;
+          if (dataChars > MAX_SSE_EVENT_CHARS) {
+            throw new SseLimitError();
+          }
           dataLines.push(payload);
           continue;
         }
@@ -70,6 +97,10 @@ export async function* parseSseJson(
         const payload = line.startsWith("data: ")
           ? line.slice(6)
           : line.slice(5);
+        dataChars += payload.length;
+        if (dataChars > MAX_SSE_EVENT_CHARS) {
+          throw new SseLimitError();
+        }
         dataLines.push(payload);
       }
     }
@@ -105,51 +136,99 @@ export type ChatCompletion = {
   };
 };
 
-const NAI_STRIP_KEYS = new Set([
-  "token_ids",
-  "processed_logprobs",
-  "stop_reason",
-  "matched_stop",
-  "prompt_token_ids",
-  "metadata",
+const CHUNK_KEYS = new Set([
+  "id",
+  "object",
+  "created",
+  "model",
+  "choices",
+  "usage",
+  "system_fingerprint",
+]);
+const CHOICE_KEYS = new Set([
+  "index",
+  "delta",
+  "message",
+  "finish_reason",
+  "logprobs",
+]);
+const TEXT_PART_KEYS = new Set(["role", "content", "refusal"]);
+const USAGE_KEYS = new Set([
+  "prompt_tokens",
+  "completion_tokens",
+  "total_tokens",
 ]);
 
-/** Strip NAI-only fields from a chunk (shallow + choices). */
-export function stripNaiFields<T extends Record<string, unknown>>(chunk: T): T {
+function pick(
+  src: Record<string, unknown>,
+  allowed: Set<string>,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(chunk)) {
-    if (NAI_STRIP_KEYS.has(k)) continue;
-    if (k === "choices" && Array.isArray(v)) {
-      out.choices = v.map((choice) => {
-        if (!choice || typeof choice !== "object") return choice;
-        const c: Record<string, unknown> = {};
-        for (const [ck, cv] of Object.entries(choice as Record<string, unknown>)) {
-          if (NAI_STRIP_KEYS.has(ck)) continue;
-          if (ck === "delta" && cv && typeof cv === "object") {
-            const d: Record<string, unknown> = {};
-            for (const [dk, dv] of Object.entries(cv as Record<string, unknown>)) {
-              if (NAI_STRIP_KEYS.has(dk)) continue;
-              d[dk] = dv;
-            }
-            c.delta = d;
-          } else if (ck === "message" && cv && typeof cv === "object") {
-            const m: Record<string, unknown> = {};
-            for (const [mk, mv] of Object.entries(cv as Record<string, unknown>)) {
-              if (NAI_STRIP_KEYS.has(mk)) continue;
-              m[mk] = mv;
-            }
-            c.message = m;
-          } else {
-            c[ck] = cv;
-          }
-        }
-        return c;
-      });
-    } else {
-      out[k] = v;
+  for (const key of allowed) {
+    if (Object.prototype.hasOwnProperty.call(src, key) && src[key] !== undefined) {
+      out[key] = src[key];
     }
   }
-  return out as T;
+  return out;
+}
+
+function sanitizeUsage(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const u = value as Record<string, unknown>;
+  const out: Record<string, number> = {};
+  for (const key of USAGE_KEYS) {
+    const n = u[key];
+    if (typeof n === "number" && Number.isFinite(n)) out[key] = n;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Keep OpenAI chat chunk fields; drop NAI-only and unknown keys. */
+export function stripNaiFields<T extends Record<string, unknown>>(chunk: T): T {
+  const base = pick(chunk, CHUNK_KEYS);
+  if (Array.isArray(chunk.choices)) {
+    base.choices = chunk.choices.map((choice) => {
+      if (!choice || typeof choice !== "object") return choice;
+      const c = pick(choice as Record<string, unknown>, CHOICE_KEYS);
+      const delta = (choice as Record<string, unknown>).delta;
+      if (delta && typeof delta === "object") {
+        c.delta = pick(delta as Record<string, unknown>, TEXT_PART_KEYS);
+      }
+      const message = (choice as Record<string, unknown>).message;
+      if (message && typeof message === "object") {
+        c.message = pick(message as Record<string, unknown>, TEXT_PART_KEYS);
+      }
+      return c;
+    });
+  }
+  if (chunk.usage && typeof chunk.usage === "object") {
+    const usage = sanitizeUsage(chunk.usage);
+    if (usage) base.usage = usage;
+    else delete base.usage;
+  }
+  return base as T;
+}
+
+function emptyCompletion(meta: {
+  id: string;
+  created: number;
+  model: string;
+}): ChatCompletion {
+  return {
+    id: meta.id,
+    object: "chat.completion",
+    created: meta.created,
+    model: meta.model,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: "" },
+        finish_reason: "stop",
+        logprobs: null,
+      },
+    ],
+    usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+  };
 }
 
 /**
@@ -159,23 +238,7 @@ export async function aggregateChatStream(
   upstream: Response,
   meta: { id: string; created: number; model: string },
 ): Promise<ChatCompletion> {
-  if (!upstream.body) {
-    return {
-      id: meta.id,
-      object: "chat.completion",
-      created: meta.created,
-      model: meta.model,
-      choices: [
-        {
-          index: 0,
-          message: { role: "assistant", content: "" },
-          finish_reason: "stop",
-          logprobs: null,
-        },
-      ],
-      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-    };
-  }
+  if (!upstream.body) return emptyCompletion(meta);
 
   let fullText = "";
   let finishReason: string | null = null;
@@ -183,40 +246,49 @@ export async function aggregateChatStream(
   let id = meta.id;
   let model = meta.model;
   let created = meta.created;
+  let truncated = false;
 
-  for await (const raw of parseSseJson(upstream.body)) {
-    const chunk = stripNaiFields(raw as Record<string, unknown>);
-    if (typeof chunk.id === "string") id = chunk.id;
-    if (typeof chunk.model === "string") model = chunk.model;
-    if (typeof chunk.created === "number") created = chunk.created;
+  try {
+    for await (const raw of parseSseJson(upstream.body)) {
+      const chunk = stripNaiFields(raw as Record<string, unknown>);
+      if (typeof chunk.id === "string") id = chunk.id;
+      if (typeof chunk.model === "string") model = chunk.model;
+      if (typeof chunk.created === "number") created = chunk.created;
 
-    if (chunk.usage && typeof chunk.usage === "object") {
-      const u = chunk.usage as Record<string, unknown>;
-      usage = {
-        prompt_tokens: num(u.prompt_tokens),
-        completion_tokens: num(u.completion_tokens),
-        total_tokens: num(u.total_tokens),
-      };
-    }
+      if (chunk.usage && typeof chunk.usage === "object") {
+        const u = chunk.usage as Record<string, unknown>;
+        usage = {
+          prompt_tokens: num(u.prompt_tokens),
+          completion_tokens: num(u.completion_tokens),
+          total_tokens: num(u.total_tokens),
+        };
+      }
 
-    const choices = chunk.choices;
-    if (!Array.isArray(choices) || choices.length === 0) continue;
-    const c0 = choices[0] as Record<string, unknown>;
-    if (typeof c0.finish_reason === "string") finishReason = c0.finish_reason;
+      const choices = chunk.choices;
+      if (!Array.isArray(choices) || choices.length === 0) continue;
+      const c0 = choices[0] as Record<string, unknown>;
+      if (typeof c0.finish_reason === "string") finishReason = c0.finish_reason;
 
-    const delta = c0.delta as Record<string, unknown> | undefined;
-    if (delta && typeof delta.content === "string") {
-      fullText += delta.content;
+      const delta = c0.delta as Record<string, unknown> | undefined;
+      if (delta && typeof delta.content === "string") {
+        fullText += delta.content;
+      }
+      const message = c0.message as Record<string, unknown> | undefined;
+      if (!delta && message && typeof message.content === "string") {
+        fullText += message.content;
+      }
+      if (typeof c0.text === "string" && c0.text && !delta) {
+        fullText += c0.text;
+      }
+      if (fullText.length > MAX_COMPLETION_CHARS) {
+        fullText = fullText.slice(0, MAX_COMPLETION_CHARS);
+        truncated = true;
+        break;
+      }
     }
-    // Some providers put content on message even in stream chunks
-    const message = c0.message as Record<string, unknown> | undefined;
-    if (!delta && message && typeof message.content === "string") {
-      fullText += message.content;
-    }
-    // Rare: non-stream-shaped chunk with text field
-    if (typeof c0.text === "string" && c0.text && !delta) {
-      fullText += c0.text;
-    }
+  } catch (err) {
+    if (!(err instanceof SseLimitError)) throw err;
+    truncated = true;
   }
 
   return {
@@ -228,7 +300,7 @@ export async function aggregateChatStream(
       {
         index: 0,
         message: { role: "assistant", content: fullText },
-        finish_reason: finishReason ?? "stop",
+        finish_reason: truncated ? "length" : (finishReason ?? "stop"),
         logprobs: null,
       },
     ],

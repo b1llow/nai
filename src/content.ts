@@ -1,4 +1,10 @@
 import { openaiError } from "./errors";
+import {
+  MAX_MESSAGE_CHARS,
+  MAX_MESSAGES,
+  MAX_TOTAL_CONTENT_CHARS,
+  safeIdent,
+} from "./limits";
 
 export type ChatMessage = {
   role: string;
@@ -11,7 +17,15 @@ export type ChatMessage = {
  */
 export function flattenContent(content: unknown, param = "messages"): string {
   if (content == null) return "";
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    if (content.length > MAX_MESSAGE_CHARS) {
+      throw openaiError(400, "message content is too long", {
+        type: "invalid_request_error",
+        param,
+      });
+    }
+    return content;
+  }
   if (!Array.isArray(content)) {
     throw openaiError(400, "message content must be a string or array of parts", {
       type: "invalid_request_error",
@@ -69,7 +83,14 @@ export function flattenContent(content: unknown, param = "messages"): string {
       param,
     });
   }
-  return texts.join("\n");
+  const joined = texts.join("\n");
+  if (joined.length > MAX_MESSAGE_CHARS) {
+    throw openaiError(400, "message content is too long", {
+      type: "invalid_request_error",
+      param,
+    });
+  }
+  return joined;
 }
 
 export function normalizeRole(role: unknown): string {
@@ -88,8 +109,15 @@ export function normalizeMessages(
       param,
     });
   }
+  if (messages.length > MAX_MESSAGES) {
+    throw openaiError(400, `messages must contain at most ${MAX_MESSAGES} items`, {
+      type: "invalid_request_error",
+      param,
+    });
+  }
 
   const out: ChatMessage[] = [];
+  let total = 0;
   for (const m of messages) {
     if (!m || typeof m !== "object") {
       throw openaiError(400, "each message must be an object", {
@@ -100,14 +128,48 @@ export function normalizeMessages(
     const msg = m as Record<string, unknown>;
     const role = normalizeRole(msg.role);
     if (!["system", "user", "assistant"].includes(role)) {
-      throw openaiError(
-        400,
-        `unsupported message role: ${String(msg.role)}`,
-        { type: "invalid_request_error", param },
-      );
+      throw openaiError(400, `unsupported message role: ${safeIdent(msg.role)}`, {
+        type: "invalid_request_error",
+        param,
+      });
     }
     const content = flattenContent(msg.content, param);
+    total += content.length;
+    if (total > MAX_TOTAL_CONTENT_CHARS) {
+      throw openaiError(400, "messages content is too long", {
+        type: "invalid_request_error",
+        param,
+      });
+    }
     out.push({ role, content });
   }
   return out;
+}
+
+export function assertMessagesBudget(
+  messages: ChatMessage[],
+  param = "messages",
+): void {
+  if (messages.length > MAX_MESSAGES) {
+    throw openaiError(400, `messages must contain at most ${MAX_MESSAGES} items`, {
+      type: "invalid_request_error",
+      param,
+    });
+  }
+  let total = 0;
+  for (const m of messages) {
+    if (m.content.length > MAX_MESSAGE_CHARS) {
+      throw openaiError(400, "message content is too long", {
+        type: "invalid_request_error",
+        param,
+      });
+    }
+    total += m.content.length;
+    if (total > MAX_TOTAL_CONTENT_CHARS) {
+      throw openaiError(400, "messages content is too long", {
+        type: "invalid_request_error",
+        param,
+      });
+    }
+  }
 }

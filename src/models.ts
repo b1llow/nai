@@ -3,6 +3,7 @@ import type { Env } from "./env";
 import type { AppEnv } from "./types";
 import { HttpError, openaiError } from "./errors";
 import { NAI_OA, naiFetch, throwMappedUpstreamError } from "./upstream";
+import { MAX_MODEL_LEN, safeIdent } from "./limits";
 
 export const FALLBACK_MODELS = [
   {
@@ -29,12 +30,15 @@ export type ModelItem = {
 function normalizeModel(item: unknown): ModelItem | null {
   if (!item || typeof item !== "object") return null;
   const o = item as Record<string, unknown>;
-  if (typeof o.id !== "string" || !o.id) return null;
+  if (typeof o.id !== "string" || !o.id || o.id.length > MAX_MODEL_LEN) return null;
   return {
     id: o.id,
     object: "model",
-    created: typeof o.created === "number" ? o.created : 1735689600,
-    owned_by: typeof o.owned_by === "string" ? o.owned_by : "novelai",
+    created: typeof o.created === "number" && Number.isFinite(o.created) ? o.created : 1735689600,
+    owned_by:
+      typeof o.owned_by === "string" && o.owned_by.length <= 64
+        ? o.owned_by
+        : "novelai",
   };
 }
 
@@ -57,11 +61,19 @@ export async function fetchModels(
       }
       return FALLBACK_MODELS.slice();
     }
-    const body = (await res.json()) as { data?: unknown };
+    const text = await res.text();
+    if (text.length > 256_000) return FALLBACK_MODELS.slice();
+    let body: { data?: unknown };
+    try {
+      body = JSON.parse(text) as { data?: unknown };
+    } catch {
+      return FALLBACK_MODELS.slice();
+    }
     if (!Array.isArray(body.data) || body.data.length === 0) {
       return FALLBACK_MODELS.slice();
     }
     const models = body.data
+      .slice(0, 256)
       .map(normalizeModel)
       .filter((m): m is ModelItem => m !== null);
     return models.length > 0 ? models : FALLBACK_MODELS.slice();
@@ -80,11 +92,18 @@ export async function listModels(c: Context<AppEnv>) {
 
 export async function getModel(c: Context<AppEnv>) {
   const auth = c.get("auth") as string;
-  const id = c.req.param("id");
+  const id = c.req.param("id") ?? "";
+  if (!id || id.length > MAX_MODEL_LEN) {
+    throw openaiError(404, "The model does not exist", {
+      type: "invalid_request_error",
+      code: "model_not_found",
+      param: "model",
+    });
+  }
   const data = await fetchModels(c.env, auth, c.req.raw.signal);
   const found = data.find((m) => m.id === id);
   if (!found) {
-    throw openaiError(404, `The model '${id}' does not exist`, {
+    throw openaiError(404, `The model '${safeIdent(id, MAX_MODEL_LEN)}' does not exist`, {
       type: "invalid_request_error",
       code: "model_not_found",
       param: "model",
