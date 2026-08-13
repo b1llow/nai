@@ -3,7 +3,7 @@
   "name": "nai",
   "main": "src/index.ts",
   "compatibility_date": "2026-08-13",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": true,
   "vars": {
     "NAI_BASE_URL": "https://text.novelai.net",
@@ -16,6 +16,22 @@
       "namespace_id": "1001",
       "simple": {
         "limit": 120,
+        "period": 60
+      }
+    },
+    {
+      "name": "OAUTH_AUTHORIZE_RATE_LIMIT",
+      "namespace_id": "1002",
+      "simple": {
+        "limit": 30,
+        "period": 60
+      }
+    },
+    {
+      "name": "OAUTH_REGISTER_RATE_LIMIT",
+      "namespace_id": "1003",
+      "simple": {
+        "limit": 8,
         "period": 60
       }
     }
@@ -33,6 +49,12 @@
       "head_sampling_rate": 0.01
     }
   },
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "52799448e7ed4f9eb5819e2952545e92"
+    }
+  ],
   "routes": [
     {
       "pattern": "nai.hoshinoaya.com",

@@ -8,8 +8,8 @@ import { HttpError, openaiError } from "./errors";
 export async function enforceIpRateLimit(
   env: Env,
   request: Request,
+  limiter: RateLimit | undefined = env.API_RATE_LIMIT,
 ): Promise<void> {
-  const limiter = env.API_RATE_LIMIT;
   if (!limiter) return;
   const ip =
     request.headers.get("cf-connecting-ip") ||

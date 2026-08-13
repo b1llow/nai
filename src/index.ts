@@ -1,8 +1,8 @@
 import type { Env } from "./env";
-import app from "./app";
 import { unhandledToResponse } from "./errors";
 import { requestPath } from "./log";
-import { handleMcp } from "./mcp/server";
+import { oauthProviderFor } from "./oauth/provider";
+import { enforceIpRateLimit } from "./ratelimit";
 
 export default {
   async fetch(
@@ -12,10 +12,10 @@ export default {
   ): Promise<Response> {
     try {
       const url = new URL(request.url);
-      if (url.pathname === "/mcp") {
-        return await handleMcp(request, env, ctx);
+      if (request.method === "POST" && url.pathname === "/oauth/register") {
+        await enforceIpRateLimit(env, request, env.OAUTH_REGISTER_RATE_LIMIT);
       }
-      return await app.fetch(request, env, ctx);
+      return await oauthProviderFor(request).fetch(request, env, ctx);
     } catch (err) {
       return unhandledToResponse(err, requestPath(request));
     }

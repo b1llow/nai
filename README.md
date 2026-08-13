@@ -26,7 +26,10 @@ In short: keep using the NovelAI models you pay for, without rewriting every cli
 |--------|------|--------|
 | `GET` | `/` | Service info |
 | `GET` | `/health` | Liveness |
-| `POST`/`GET` | `/mcp` | Remote MCP (Streamable HTTP) |
+| `POST`/`GET` | `/mcp` | Remote MCP (Streamable HTTP). OAuth or NovelAI Bearer |
+| `GET`/`POST` | `/authorize` | MCP OAuth consent (paste Persistent API token) |
+| `POST` | `/oauth/token` | OAuth token + refresh |
+| `POST` | `/oauth/register` | OAuth dynamic client registration |
 | `GET` | `/v1/models` | Model list (upstream, with static fallback) |
 | `GET` | `/v1/models/:id` | Single model |
 | `POST` | `/v1/chat/completions` | Chat Completions (stream + non-stream) |
@@ -44,15 +47,30 @@ The header is forwarded upstream unchanged.
 
 ## MCP server
 
-`POST https://nai.hoshinoaya.com/mcp` (Streamable HTTP). Auth is a NovelAI Persistent API token on every request, same as `/v1`:
+`POST https://nai.hoshinoaya.com/mcp` (Streamable HTTP).
+
+ChatGPT Cloud and other remote MCP hosts **cannot** set a custom `Authorization` header. This Worker is an OAuth 2.1 authorization server (PKCE S256, CIMD + DCR, refresh tokens). On `/authorize`, paste a NovelAI Persistent API token. The grant stores that token encrypted in Workers KV (`OAUTH_KV`) and issues ChatGPT its own access token. Completing OAuth does **not** send your NovelAI email or password to this Worker.
+
+Protected resource metadata pins `resource` to the request origin plus `/mcp` for hosts this Worker serves (`nai.hoshinoaya.com`, loopback, `*.workers.dev`). ChatGPT should use `https://nai.hoshinoaya.com/mcp`. Dynamic client registration only accepts loopback URLs, ChatGPT connector OAuth callbacks, and Claude's `https://claude.ai/api/mcp/auth_callback`. The consent page shows the client name (default **an MCP client**, never assumed to be ChatGPT), `client_id`, and `redirect_uri` so you can confirm the callback before pasting a token.
+
+### ChatGPT (Developer Mode)
+
+1. Enable Developer mode in ChatGPT (Settings → Apps).
+2. Create a connector / app whose MCP URL is `https://nai.hoshinoaya.com/mcp`.
+3. When ChatGPT opens the authorization page, paste a NovelAI **Persistent API token** from NovelAI account settings and approve.
+4. ChatGPT refreshes access with `offline_access`; you should not need to paste the token on every chat.
+
+Create a persistent token in the NovelAI account settings. Do not send email/password to this worker. Do not put a NovelAI token in a Worker secret: this URL is public, and a shared fallback token would let anyone use your account.
+
+### Cursor / Claude Desktop
+
+Clients that can set HTTP headers may still pass the NovelAI token on each MCP request (same as `/v1`):
 
 ```http
 Authorization: Bearer <token>
 ```
 
-Create a persistent token in the NovelAI account settings. Do not send email/password to this worker. Do not put a NovelAI token in a Worker secret: this URL is public, and a shared fallback token would let anyone use your account. Clients that cannot set HTTP headers should use `mcp-remote` (below) instead of a server-side token.
-
-Cursor / Claude Desktop via `mcp-remote`:
+That compatibility path is token passthrough, not the MCP OAuth profile. Prefer OAuth when the client supports it (`mcp-remote` without `--header` will open a browser). Header injection still works:
 
 ```json
 {
@@ -246,12 +264,14 @@ const completion = await client.chat.completions.create({
 ## Architecture
 
 ```
-Client (OpenAI SDK / ST / curl / MCP)
-        │  Bearer NAI token
+Client (OpenAI SDK / ST / curl / MCP / ChatGPT)
+        │  /v1 Bearer NAI token
+        │  /mcp OAuth access token (or NAI Bearer compat)
         ▼
    Cloudflare Worker
      /v1/*  Hono OpenAI proxy
-     /mcp   createMcpHandler (stateless)
+     /mcp   createMcpHandler (stateless) behind OAuth 2.1
+     /authorize  consent (Persistent API token → encrypted grant props)
         │
         ├── text.novelai.net   /oa/v1/*  /ai/generate
         ├── image.novelai.net  /ai/generate-image  /ai/augment-image  /ai/encode-vibe
@@ -270,6 +290,7 @@ Client (OpenAI SDK / ST / curl / MCP)
 | Message content flatten | `src/content.ts` |
 | OpenAI error mapping | `src/errors.ts` |
 | MCP tools / handler | `src/mcp/` |
+| MCP OAuth consent | `src/oauth/` |
 | Image / Director / TTS | `src/nai/` |
 
 Chat and Responses always request `stream: true` from NovelAI. Non-stream clients get a fully aggregated `chat.completion` / `response` object. Streaming clients receive stripped OpenAI-shaped SSE (`token_ids` and other NAI-only fields removed).
@@ -282,11 +303,14 @@ Chat and Responses always request `stream: true` from NovelAI. Non-stream client
 | `NAI_IMAGE_BASE_URL` | yes | Image API origin. Must be `https://image.novelai.net` |
 | `NAI_API_BASE_URL` | yes | Account / upscale / TTS origin. Must be `https://api.novelai.net` |
 | `NAI_ALLOW_UNSAFE_BASE_URL` | no | Set to `1` only for local mocks; skips the host allowlist but still requires `http(s)` and rejects URLs with credentials |
+| `OAUTH_KV` | yes (MCP OAuth) | Workers KV for OAuth clients, grants, and short-lived consent sessions. NovelAI tokens in grants are encrypted by `workers-oauth-provider`. |
 | `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` and `/mcp` |
+| `OAUTH_AUTHORIZE_RATE_LIMIT` | no | 30 requests / 60s per client IP on `GET`/`POST /authorize` |
+| `OAUTH_REGISTER_RATE_LIMIT` | no | 8 requests / 60s per client IP on `POST /oauth/register` |
 
 Authenticated `/v1/*` and `/mcp` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB on `/v1` and 20 MiB on `/mcp` (img2img); the MCP cap is enforced on the actual body, not only `Content-Length`. Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
 
-Callers must supply the NovelAI token per request (`Authorization: Bearer <token>`) on `/v1/*` and `/mcp`. Tokens must be printable ASCII Bearer credentials (8–4096 chars).
+Callers must supply the NovelAI token per request (`Authorization: Bearer <token>`) on `/v1/*`. `/mcp` accepts either an OAuth access token issued by this Worker or a NovelAI Bearer token (compat). Tokens must be printable ASCII Bearer credentials (8–4096 chars).
 
 ## License
 

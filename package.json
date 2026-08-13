@@ -13,6 +13,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.10.3",
     "@modelcontextprotocol/server": "^2.0.0",
     "agents": "^0.20.1",
     "fflate": "^0.8.3",

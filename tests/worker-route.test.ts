@@ -24,5 +24,6 @@ describe("worker fetch routing", () => {
     );
     const body = (await res.json()) as { endpoints?: string[] };
     expect(body.endpoints).toContain("/mcp");
+    expect(body.endpoints).toContain("/authorize");
   });
 });

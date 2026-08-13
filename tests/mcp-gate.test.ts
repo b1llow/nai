@@ -39,6 +39,22 @@ describe("MCP HTTP gates", () => {
     expect(res.status).toBe(401);
   });
 
+  it("does not treat a malformed OAuth naiAuth prop as the inbound Bearer", async () => {
+    const res = await handleMcp(
+      new Request("https://nai.hoshinoaya.com/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer x",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      }),
+      env,
+      testExecutionContext({ naiAuth: "Bearer x" }),
+    );
+    expect(res.status).not.toBe(401);
+  });
+
   it("rejects an oversized streamed body without Content-Length", async () => {
     const chunk = new Uint8Array(64 * 1024).fill(120);
     let sent = 0;

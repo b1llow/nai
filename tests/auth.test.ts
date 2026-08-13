@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAuthorization, resolveMcpAuthorization } from "../src/auth";
+import { parseAuthorization, parsePastedNaiToken, resolveMcpAuthorization } from "../src/auth";
 import { HttpError } from "../src/errors";
 
 describe("parseAuthorization", () => {
@@ -42,5 +42,19 @@ describe("resolveMcpAuthorization", () => {
 
   it("rejects a malformed header", () => {
     expect(() => resolveMcpAuthorization("Bearer x")).toThrow(HttpError);
+  });
+});
+
+describe("parsePastedNaiToken", () => {
+  it("accepts a raw token or a Bearer-prefixed value", () => {
+    expect(parsePastedNaiToken("abcdefghijklmnop")).toBe("Bearer abcdefghijklmnop");
+    expect(parsePastedNaiToken("  Bearer abcdefghijklmnop  ")).toBe(
+      "Bearer abcdefghijklmnop",
+    );
+  });
+
+  it("rejects short or empty pastes", () => {
+    expect(() => parsePastedNaiToken("")).toThrow(HttpError);
+    expect(() => parsePastedNaiToken("short")).toThrow(HttpError);
   });
 });

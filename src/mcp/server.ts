@@ -1,10 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { createMcpHandler } from "agents/mcp/server";
 import type { Env } from "../env";
-import { resolveMcpAuthorization } from "../auth";
 import { limitRequestBody } from "../body-limit";
 import { unhandledToResponse } from "../errors";
-import { MAX_MCP_BODY_BYTES, MCP_CUSTOM_DOMAIN } from "../limits";
+import {
+  MAX_MCP_BODY_BYTES,
+  MCP_CUSTOM_DOMAIN,
+  MCP_PATH,
+  isAllowedMcpHostname,
+} from "../limits";
+import { resolveMcpToolAuth } from "../oauth/props";
 import { enforceIpRateLimit } from "../ratelimit";
 import { registerNaiTools } from "./tools";
 
@@ -21,14 +26,7 @@ function mcpAllowedHostnames(request: Request): string[] {
   const hosts = new Set(["localhost", "127.0.0.1", MCP_CUSTOM_DOMAIN]);
   try {
     const hostname = new URL(request.url).hostname.toLowerCase();
-    if (
-      hostname === MCP_CUSTOM_DOMAIN ||
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname.endsWith(".workers.dev")
-    ) {
-      hosts.add(hostname);
-    }
+    if (isAllowedMcpHostname(hostname)) hosts.add(hostname);
   } catch {
     /* ignore */
   }
@@ -47,12 +45,13 @@ export async function handleMcp(
       inbound = await limitRequestBody(inbound, MAX_MCP_BODY_BYTES);
     }
 
-    const auth = resolveMcpAuthorization(
+    const auth = resolveMcpToolAuth(
+      ctx.props,
       inbound.headers.get("Authorization") ?? undefined,
     );
 
     const response = await createMcpHandler(() => createNaiMcpServer(env, auth), {
-      route: "/mcp",
+      route: MCP_PATH,
       allowedHostnames: mcpAllowedHostnames(inbound),
       corsOptions: {
         origin: "*",

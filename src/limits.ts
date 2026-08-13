@@ -25,6 +25,8 @@ export const MAX_MODELS_RESPONSE_BYTES = 256_000;
 export const MAX_CHAT_JSON_BYTES = 1024 * 1024;
 export const RATE_LIMIT_PER_MINUTE = 120;
 export const MAX_MCP_BODY_BYTES = 20 * 1024 * 1024;
+export const MAX_AUTHORIZE_BODY_BYTES = 64 * 1024;
+export const OAUTH_CONSENT_TTL_SECONDS = 600;
 export const MAX_BINARY_RESPONSE_BYTES = 32 * 1024 * 1024;
 export const MAX_IMAGE_INPUT_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_PROMPT_CHARS = 8_000;
@@ -34,6 +36,37 @@ export const MAX_CHARACTER_PROMPTS = 6;
 export const MAX_VOICE_TEXT_CHARS = 1_000;
 export const MAX_NATIVE_TEXT_CHARS = 100_000;
 export const MCP_CUSTOM_DOMAIN = "nai.hoshinoaya.com";
+export const MCP_PATH = "/mcp";
+export const MCP_RESOURCE = `https://${MCP_CUSTOM_DOMAIN}${MCP_PATH}`;
+export const MCP_ISSUER = `https://${MCP_CUSTOM_DOMAIN}`;
+
+/** Hostnames this Worker serves `/mcp` on. Unknown hosts stay bound to `MCP_RESOURCE`. */
+export function isAllowedMcpHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === MCP_CUSTOM_DOMAIN ||
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.endsWith(".workers.dev")
+  );
+}
+
+/**
+ * RFC 9728 resource identifier for this request. Production ChatGPT uses
+ * `MCP_RESOURCE`; wrangler and `*.workers.dev` bind tokens to that origin
+ * so audience checks succeed without weakening the custom-domain pin.
+ */
+export function mcpResourceFromRequest(request: Request): string {
+  try {
+    const url = new URL(request.url);
+    if (isAllowedMcpHostname(url.hostname)) return `${url.origin}${MCP_PATH}`;
+  } catch {
+    /* ignore */
+  }
+  return MCP_RESOURCE;
+}
 
 export type NaiHostKind = "text" | "image" | "api";
 
