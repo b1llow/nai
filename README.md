@@ -115,20 +115,22 @@ npm run typecheck
 
 ### Deploy
 
+Local publish (optional):
+
 ```bash
 npm run deploy
 ```
 
-Custom domain in this repo: `nai.hoshinoaya.com` (see `wrangler.jsonc` `routes`).
+Production deploys are **Cloudflare Workers Builds**, not GitHub Actions. GitHub Actions (`.github/workflows/ci.yml`) only runs typecheck and tests.
 
-Pushes to `main` also deploy via GitHub Actions (`.github/workflows/ci.yml`) after tests pass. Add these repository secrets under **Settings → Secrets and variables → Actions**:
+The dashboard Worker is already named `nai`, matching `wrangler.jsonc`. Connect the GitHub repo once:
 
-| Secret | Value |
-|--------|--------|
-| `CLOUDFLARE_API_TOKEN` | API token from the [Edit Cloudflare Workers](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/) template. Include the zone that serves `nai.hoshinoaya.com`. |
-| `CLOUDFLARE_ACCOUNT_ID` | Account ID from the Workers overview page |
+1. Open [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → **nai** → **Settings** → **Builds** → **Connect**
+2. Authorize the [Cloudflare Workers & Pages GitHub App](https://github.com/apps/cloudflare-workers-and-pages) if prompted, and grant access to `b1llow/nai`
+3. Production branch: `main`. Leave the build command empty. Deploy command: `npm run deploy` (uses the Wrangler version in `package.json`)
+4. Save, then either retry a build of current `main` or push a commit. Cloudflare will `wrangler deploy` from that commit.
 
-After the secrets exist, a push to `main` (or **Actions → CI → Run workflow** on `main`) deploys the Worker. Do not also enable Cloudflare Workers Builds on this repo unless you disable the Actions deploy job — both would publish on every push.
+Custom domain: `nai.hoshinoaya.com` (`wrangler.jsonc` `routes`). After a successful production build, `/v1/*` responses should include `Cache-Control: private, no-store`.
 
 ## Client usage
 
