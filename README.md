@@ -115,11 +115,22 @@ npm run typecheck
 
 ### Deploy
 
+Local publish (optional):
+
 ```bash
 npm run deploy
 ```
 
-Custom domain in this repo: `nai.hoshinoaya.com` (see `wrangler.jsonc` `routes`).
+Production deploys are **Cloudflare Workers Builds**, not GitHub Actions. GitHub Actions (`.github/workflows/ci.yml`) only runs typecheck and tests.
+
+The dashboard Worker is already named `nai`, matching `wrangler.jsonc`. Connect the GitHub repo once:
+
+1. Open [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → **nai** → **Settings** → **Builds** → **Connect**
+2. Authorize the [Cloudflare Workers & Pages GitHub App](https://github.com/apps/cloudflare-workers-and-pages) if prompted, and grant access to `b1llow/nai`
+3. Production branch: `main`. Leave the build command empty. Deploy command: `npm run deploy` (uses the Wrangler version in `package.json`)
+4. Save, then either retry a build of current `main` or push a commit. Cloudflare will `wrangler deploy` from that commit.
+
+Custom domain: `nai.hoshinoaya.com` (`wrangler.jsonc` `routes`). After a successful production build, `/v1/*` responses should include `Cache-Control: private, no-store`.
 
 ## Client usage
 
