@@ -90,13 +90,15 @@ describe("isAllowedNaiPath", () => {
       isAllowedNaiPath("image", "/ai/generate-image/suggest-tags?prompt=blue"),
     ).toBe(true);
     expect(isAllowedNaiPath("image", "/oa/v1/models")).toBe(false);
+    expect(isAllowedNaiPath("image", "/user/subscription")).toBe(true);
+    expect(isAllowedNaiPath("image", "/user/information")).toBe(true);
   });
 
   it("rejects traversal, protocol-relative, and unknown api paths", () => {
     expect(isAllowedNaiPath("text", "//evil.example/oa/v1/models")).toBe(false);
     expect(isAllowedNaiPath("text", "/oa/v1/../secret")).toBe(false);
     expect(isAllowedNaiPath("api", "/user/login")).toBe(false);
-    expect(isAllowedNaiPath("api", "/user/subscription")).toBe(true);
+    expect(isAllowedNaiPath("api", "/user/subscription")).toBe(false);
     expect(isAllowedNaiPath("api", "/ai/upscale")).toBe(true);
   });
 });

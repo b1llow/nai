@@ -9,6 +9,7 @@ import { limitRequestBody } from "../body-limit";
 import type { Env } from "../env";
 import { HttpError, openaiError, unhandledToResponse } from "../errors";
 import { MAX_AUTHORIZE_BODY_BYTES } from "../limits";
+import { errorMessage, logError } from "../log";
 import { getSubscription } from "../nai/account";
 import { enforceIpRateLimit } from "../ratelimit";
 import {
@@ -134,6 +135,12 @@ async function submitAuthorize(request: Request, env: Env): Promise<Response> {
     await getSubscription(env, naiAuth, inbound.signal);
   } catch (err) {
     await putConsent(env.OAUTH_KV, consentId, record);
+    logError({
+      message: "nai token check failed",
+      error: errorMessage(err),
+      path: "/authorize",
+      status: err instanceof HttpError ? err.status : undefined,
+    });
     const message = subscriptionErrorMessage(err);
     return htmlResponse(
       400,
