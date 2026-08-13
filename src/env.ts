@@ -1,21 +1,19 @@
 import { openaiError } from "./errors";
 import { isAllowedNaiHost } from "./limits";
 
-export type RateLimitBinding = {
-  limit(options: { key: string }): Promise<{ success: boolean }>;
+/**
+ * Bindings from `wrangler types` (`Cloudflare.Env`), plus the local-only
+ * unsafe-URL flag which is set via `.dev.vars` and is not in production vars.
+ *
+ * `API_RATE_LIMIT` is optional at the type level because the Worker fail-opens
+ * when the binding is missing (tests and platform outages).
+ */
+export type Env = Omit<Cloudflare.Env, "API_RATE_LIMIT"> & {
+  NAI_ALLOW_UNSAFE_BASE_URL?: string;
+  API_RATE_LIMIT?: Cloudflare.Env["API_RATE_LIMIT"];
 };
 
-export type Env = {
-  /** Required wrangler var (see wrangler.jsonc vars). */
-  NAI_BASE_URL: string;
-  /**
-   * When "1" or "true", skip the NovelAI host allowlist (local mocks only).
-   * Still requires http(s) and rejects embedded credentials.
-   */
-  NAI_ALLOW_UNSAFE_BASE_URL?: string;
-  /** Optional Cloudflare Rate Limiting binding. */
-  API_RATE_LIMIT?: RateLimitBinding;
-};
+export type NaiUrlEnv = Pick<Env, "NAI_BASE_URL" | "NAI_ALLOW_UNSAFE_BASE_URL">;
 
 function parseBase(raw: string): URL {
   try {
@@ -32,7 +30,7 @@ function parseBase(raw: string): URL {
  * Resolve the upstream origin. Production only allows https://text.novelai.net
  * and https://api.novelai.net so a bad binding cannot exfiltrate Bearer tokens.
  */
-export function resolveNaiBaseUrl(env: Env): string {
+export function resolveNaiBaseUrl(env: NaiUrlEnv): string {
   const url = parseBase(env.NAI_BASE_URL);
   if (url.username || url.password) {
     throw openaiError(500, "Server misconfigured", {

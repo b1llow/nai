@@ -67,7 +67,7 @@ export function sanitizeTokenCountResponse(
 }
 
 export async function handleTokenCount(c: Context<AppEnv>) {
-  const auth = c.get("auth") as string;
+  const auth = c.get("auth");
   let raw: unknown;
   try {
     raw = await c.req.json();

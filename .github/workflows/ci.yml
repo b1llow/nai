@@ -24,5 +24,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm run cf-typegen -- --check
       - run: npm run typecheck
       - run: npm test
