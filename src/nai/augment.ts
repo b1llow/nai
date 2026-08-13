@@ -1,7 +1,7 @@
 import type { Env } from "../env";
 import { openaiError } from "../errors";
 import { MAX_BINARY_RESPONSE_BYTES } from "../limits";
-import { bytesToBase64 } from "./binary";
+import { bytesToBase64, pngSize } from "./binary";
 import { DIRECTOR_TYPES, EMOTIONS, clampDim } from "./catalog";
 import { decodeUserImage } from "./image-input";
 import { naiFetchBinary } from "../upstream";
@@ -25,7 +25,22 @@ export type ImageFileResult = {
   name: string;
   mimeType: "image/png";
   base64: string;
+  bytes: Uint8Array;
+  width?: number;
+  height?: number;
 };
+
+function toImageFile(f: { name: string; bytes: Uint8Array }): ImageFileResult {
+  const size = pngSize(f.bytes);
+  return {
+    name: f.name,
+    mimeType: "image/png",
+    base64: bytesToBase64(f.bytes),
+    bytes: f.bytes,
+    width: size?.width,
+    height: size?.height,
+  };
+}
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
@@ -79,11 +94,7 @@ export async function runDirector(
     { method: "POST", auth, host: "image", body, signal },
     MAX_BINARY_RESPONSE_BYTES,
   );
-  return extractPngs(zipBytes).map((f) => ({
-    name: f.name,
-    mimeType: "image/png" as const,
-    base64: bytesToBase64(f.bytes),
-  }));
+  return extractPngs(zipBytes).map(toImageFile);
 }
 
 export async function upscaleImage(
@@ -113,9 +124,5 @@ export async function upscaleImage(
     },
     MAX_BINARY_RESPONSE_BYTES,
   );
-  return extractPngs(zipBytes).map((f) => ({
-    name: f.name,
-    mimeType: "image/png" as const,
-    base64: bytesToBase64(f.bytes),
-  }));
+  return extractPngs(zipBytes).map(toImageFile);
 }

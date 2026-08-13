@@ -3,8 +3,13 @@ import {
   MAX_BINARY_RESPONSE_BYTES,
   MAX_ERROR_BODY_BYTES,
 } from "../limits";
-import { bytesToBase64 } from "./binary";
+import {
+  artifactOwner,
+  getCachedVibe,
+  putCachedVibe,
+} from "../mcp/artifacts";
 import { naiFetchBinary, naiFetchJson } from "../upstream";
+import { base64ToBytes, bytesToBase64, pngSize } from "./binary";
 import { applyEncodedVibes, prepareGenerateImage, type GenerateImageInput } from "./image-payload";
 import { extractPngs } from "./zip";
 
@@ -12,6 +17,9 @@ export type GeneratedImage = {
   name: string;
   mimeType: "image/png";
   base64: string;
+  bytes: Uint8Array;
+  width?: number;
+  height?: number;
 };
 
 export type GenerateImageResult = {
@@ -58,20 +66,40 @@ export async function generateImage(
   const prepared = prepareGenerateImage(input);
   let body = prepared.body;
   if (prepared.vibesToEncode.length > 0) {
+    const owner = await artifactOwner(auth);
     const encoded: string[] = [];
     for (const slot of prepared.vibesToEncode) {
-      encoded.push(
-        await encodeVibe(
-          env,
-          auth,
-          {
-            image: slot.image,
-            model: prepared.model,
-            information_extracted: slot.information_extracted,
-          },
-          signal,
-        ),
+      const pngBytes = base64ToBytes(slot.image);
+      const cached = await getCachedVibe(
+        env,
+        owner,
+        pngBytes,
+        prepared.model,
+        slot.information_extracted,
       );
+      if (cached) {
+        encoded.push(cached);
+        continue;
+      }
+      const token = await encodeVibe(
+        env,
+        auth,
+        {
+          image: slot.image,
+          model: prepared.model,
+          information_extracted: slot.information_extracted,
+        },
+        signal,
+      );
+      await putCachedVibe(
+        env,
+        owner,
+        pngBytes,
+        prepared.model,
+        slot.information_extracted,
+        token,
+      );
+      encoded.push(token);
     }
     body = applyEncodedVibes(prepared, encoded);
   }
@@ -90,11 +118,17 @@ export async function generateImage(
   );
   const files = extractPngs(zipBytes);
   return {
-    images: files.map((f) => ({
-      name: f.name,
-      mimeType: "image/png" as const,
-      base64: bytesToBase64(f.bytes),
-    })),
+    images: files.map((f) => {
+      const size = pngSize(f.bytes);
+      return {
+        name: f.name,
+        mimeType: "image/png" as const,
+        base64: bytesToBase64(f.bytes),
+        bytes: f.bytes,
+        width: size?.width,
+        height: size?.height,
+      };
+    }),
     seed: prepared.seed,
     model: prepared.model,
     action: prepared.action,

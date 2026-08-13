@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { Env } from "../env";
 import { sanitizeChatBody, runChatCompletion } from "../chat";
@@ -23,9 +23,19 @@ import {
   resolutionPresetDescribe,
 } from "../nai/catalog";
 import { encodeVibe, generateImage, suggestTags } from "../nai/image";
-import { decodeUserImage } from "../nai/image-input";
 import { generateNativeText } from "../nai/text";
 import { generateVoice } from "../nai/voice";
+import type { GenerateImageInput } from "../nai/image-payload";
+import { imageResourceUri } from "../nai/image-input";
+import {
+  artifactOwner,
+  getCachedVibe,
+  getImage,
+  putCachedVibe,
+  putVibe,
+  resolveImageOrVibeRef,
+  resolveImageRef,
+} from "./artifacts";
 import { mcpJson, mcpText, runTool, withImages } from "./result";
 
 const pixelDim = z
@@ -45,15 +55,21 @@ const characterPromptSchema = z.object({
   y: z.number().min(0).max(1).optional(),
 });
 
+const IMAGE_REF_HINT =
+  "Preferred: image_id from a previous image tool (img_<32 hex>) or nai://image/img_.... Also accepts PNG base64 / data URL. Do not pass a filename such as image_0.png.";
+
+const REF_IMAGE_HINT =
+  "image_id, vibe_id from nai_encode_vibe, PNG base64 / data URL, or a pre-encoded vibe token (set encoded=true). Do not pass a filename.";
+
 const referenceImageSchema = z.object({
-  image: z.string().describe("PNG base64, data URL, or pre-encoded vibe token"),
+  image: z.string().describe(REF_IMAGE_HINT),
   strength: z.number().min(0).max(1).optional(),
   information_extracted: z.number().min(0.01).max(1).optional(),
   encoded: z.boolean().optional(),
 });
 
 const directorReferenceSchema = z.object({
-  image: z.string(),
+  image: z.string().describe(IMAGE_REF_HINT),
   type: z.enum(DIRECTOR_REFERENCE_TYPES),
   strength: z.number().min(0).max(1).optional(),
   fidelity: z.number().min(0).max(1).optional(),
@@ -81,8 +97,8 @@ export const naiGenerateImageInputSchema = z.object({
   n_samples: z.number().int().min(1).max(4).optional(),
   noise_schedule: z.enum(NOISE_SCHEDULES).optional(),
   character_prompts: z.array(characterPromptSchema).optional(),
-  image: z.string().optional().describe("Source PNG base64 for img2img/infill"),
-  mask: z.string().optional().describe("Inpaint mask PNG base64 (white = edit)"),
+  image: z.string().optional().describe(`Source for img2img/infill. ${IMAGE_REF_HINT}`),
+  mask: z.string().optional().describe(`Inpaint mask (white = edit). ${IMAGE_REF_HINT}`),
   strength: z.number().min(0).max(1).optional(),
   noise: z.number().min(0).max(1).optional(),
   add_original_image: z.boolean().optional(),
@@ -96,25 +112,45 @@ export const naiGenerateImageInputSchema = z.object({
   sm_dyn: z.boolean().optional(),
 });
 
+const storedImageOutputSchema = z.object({
+  image_id: z.string().nullable(),
+  filename: z.string(),
+  mime_type: z.string(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  resource_uri: z.string().optional(),
+  skipped: z.string().optional(),
+});
+
 const imageMetaOutputSchema = z.object({
+  image_id: z.string().nullable(),
+  images: z.array(storedImageOutputSchema),
   seed: z.number(),
   model: z.string(),
   action: z.string(),
   width: z.number(),
   height: z.number(),
-  files: z.array(z.string()),
 });
 
-const filesMetaOutputSchema = z.object({
-  files: z.array(z.string()),
-});
-
-const upscaleOutputSchema = filesMetaOutputSchema.extend({
+const upscaleOutputSchema = z.object({
+  image_id: z.string().nullable(),
+  images: z.array(storedImageOutputSchema),
   scale: z.union([z.literal(2), z.literal(4)]),
 });
 
-const directorOutputSchema = filesMetaOutputSchema.extend({
+const directorOutputSchema = z.object({
+  image_id: z.string().nullable(),
+  images: z.array(storedImageOutputSchema),
   req_type: z.string(),
+});
+
+const getImageOutputSchema = z.object({
+  image_id: z.string(),
+  filename: z.string(),
+  mime_type: z.string(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  resource_uri: z.string(),
 });
 
 const tagsOutputSchema = z.object({
@@ -122,9 +158,10 @@ const tagsOutputSchema = z.object({
 });
 
 const vibeOutputSchema = z.object({
-  vibe: z.string(),
+  vibe_id: z.string().nullable(),
   model: z.string(),
   information_extracted: z.number(),
+  usage: z.string(),
 });
 
 const textOutputSchema = z.object({
@@ -158,21 +195,23 @@ export function registerNaiTools(
     {
       title: "Generate image",
       description:
-        "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns PNG images plus seed/model metadata.",
+        "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns PNG ImageContent plus image_id — pass that image_id to nai_upscale, nai_director, nai_encode_vibe, nai_get_image, or img2img. Do not pass filenames such as image_0.png, and do not echo PNG base64 back.",
       inputSchema: naiGenerateImageInputSchema,
       outputSchema: imageMetaOutputSchema,
     },
     async (args) =>
       runTool(auth, async (token) => {
-        const result = await generateImage(env, token, args);
+        const owner = await artifactOwner(token);
+        const input = await resolveGenerateInput(env, owner, args);
+        const result = await generateImage(env, token, input);
         return withImages(
+          { env, owner },
           {
             seed: result.seed,
             model: result.model,
             action: result.action,
             width: result.width,
             height: result.height,
-            files: result.images.map((i) => i.name),
           },
           result.images,
         );
@@ -183,9 +222,10 @@ export function registerNaiTools(
     "nai_upscale",
     {
       title: "Upscale image",
-      description: "NovelAI 2x or 4x upscale. Costs Anlas. Image is PNG base64.",
+      description:
+        "NovelAI 2x or 4x upscale. Costs Anlas. Pass image_id from a previous image tool (preferred) or PNG base64. Returns a new image_id.",
       inputSchema: z.object({
-        image: z.string(),
+        image: z.string().describe(IMAGE_REF_HINT),
         scale: z.union([z.literal(2), z.literal(4)]).optional(),
         width: z.number().int().optional(),
         height: z.number().int().optional(),
@@ -194,12 +234,17 @@ export function registerNaiTools(
     },
     async (args) =>
       runTool(auth, async (token) => {
-        const images = await upscaleImage(env, token, args);
+        const owner = await artifactOwner(token);
+        const decoded = await resolveImageRef(env, owner, args.image, "image");
+        const images = await upscaleImage(env, token, {
+          ...args,
+          image: decoded.base64,
+          width: args.width ?? decoded.width,
+          height: args.height ?? decoded.height,
+        });
         return withImages(
-          {
-            scale: args.scale === 4 ? 4 : 2,
-            files: images.map((i) => i.name),
-          },
+          { env, owner },
+          { scale: args.scale === 4 ? 4 : 2 },
           images,
         );
       }),
@@ -210,10 +255,10 @@ export function registerNaiTools(
     {
       title: "Director tools",
       description:
-        "NovelAI Director Tools: lineart, sketch, colorize, emotion, declutter, bg-removal. Width/height default from the PNG IHDR.",
+        "NovelAI Director Tools: lineart, sketch, colorize, emotion, declutter, bg-removal. Pass image_id from a previous image tool (preferred) or PNG base64. Width/height default from stored metadata or the PNG IHDR. Returns a new image_id.",
       inputSchema: z.object({
         req_type: z.enum(DIRECTOR_TYPES),
-        image: z.string(),
+        image: z.string().describe(IMAGE_REF_HINT),
         width: z.number().int().optional(),
         height: z.number().int().optional(),
         prompt: z.string().optional(),
@@ -225,14 +270,15 @@ export function registerNaiTools(
     },
     async (args) =>
       runTool(auth, async (token) => {
-        const images = await runDirector(env, token, args);
-        return withImages(
-          {
-            req_type: args.req_type,
-            files: images.map((i) => i.name),
-          },
-          images,
-        );
+        const owner = await artifactOwner(token);
+        const decoded = await resolveImageRef(env, owner, args.image, "image");
+        const images = await runDirector(env, token, {
+          ...args,
+          image: decoded.base64,
+          width: args.width ?? decoded.width,
+          height: args.height ?? decoded.height,
+        });
+        return withImages({ env, owner }, { req_type: args.req_type }, images);
       }),
   );
 
@@ -258,9 +304,9 @@ export function registerNaiTools(
     {
       title: "Encode vibe",
       description:
-        "Encode a PNG into a V4+ vibe token (2 Anlas per unique encode). Pass the result to nai_generate_image reference_images with encoded=true to avoid re-encoding.",
+        "Encode a PNG into a V4+ vibe token (2 Anlas per unique encode; repeats of the same PNG+model+information_extracted are cached). Pass image_id or PNG. Returns vibe_id — pass that as nai_generate_image reference_images[].image. The raw token is not returned.",
       inputSchema: z.object({
-        image: z.string(),
+        image: z.string().describe(IMAGE_REF_HINT),
         model: z.string().optional(),
         information_extracted: z.number().min(0.01).max(1).optional(),
       }),
@@ -268,17 +314,91 @@ export function registerNaiTools(
     },
     async (args) =>
       runTool(auth, async (token) => {
-        const decoded = decodeUserImage(args.image, "image");
-        const tokenB64 = await encodeVibe(env, token, {
-          image: decoded.base64,
-          model: args.model ?? DEFAULT_IMAGE_MODEL,
-          information_extracted: args.information_extracted,
+        const owner = await artifactOwner(token);
+        const decoded = await resolveImageRef(env, owner, args.image, "image");
+        const model = args.model ?? DEFAULT_IMAGE_MODEL;
+        const information_extracted = args.information_extracted ?? 1;
+        const cached = await getCachedVibe(
+          env,
+          owner,
+          decoded.bytes,
+          model,
+          information_extracted,
+        );
+        const tokenB64 =
+          cached ??
+          (await encodeVibe(env, token, {
+            image: decoded.base64,
+            model,
+            information_extracted,
+          }));
+        if (!cached) {
+          await putCachedVibe(
+            env,
+            owner,
+            decoded.bytes,
+            model,
+            information_extracted,
+            tokenB64,
+          );
+        }
+        const vibe_id = await putVibe(env, owner, tokenB64, {
+          model,
+          information_extracted,
         });
         return mcpJson({
-          vibe: tokenB64,
-          model: args.model ?? DEFAULT_IMAGE_MODEL,
-          information_extracted: args.information_extracted ?? 1,
+          vibe_id,
+          model,
+          information_extracted,
+          usage:
+            "Pass vibe_id as nai_generate_image reference_images[].image. The encoded token is stored server-side.",
         });
+      }),
+  );
+
+  server.registerTool(
+    "nai_get_image",
+    {
+      title: "Get stored image",
+      description:
+        "Reload a previously generated image by image_id. Use when the host cannot read nai://image resources, or to re-display an image from an earlier turn. Pass image_id — not a filename.",
+      inputSchema: z.object({
+        image_id: z
+          .string()
+          .describe("image_id or nai://image/img_... URI from a previous image tool"),
+      }),
+      outputSchema: getImageOutputSchema,
+    },
+    async (args) =>
+      runTool(auth, async (token) => {
+        const owner = await artifactOwner(token);
+        const img = await getImage(env, owner, args.image_id, "image_id");
+        const structuredContent = {
+          image_id: img.id,
+          filename: img.name,
+          mime_type: img.mime,
+          width: img.width,
+          height: img.height,
+          resource_uri: imageResourceUri(img.id),
+        };
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+            {
+              type: "image",
+              data: img.base64,
+              mimeType: img.mime,
+              annotations: { audience: ["user"] as Array<"user" | "assistant"> },
+            },
+            {
+              type: "resource_link",
+              uri: structuredContent.resource_uri,
+              name: img.name,
+              mimeType: img.mime,
+            },
+          ],
+          structuredContent,
+        };
       }),
   );
 
@@ -446,6 +566,41 @@ export function registerNaiTools(
   );
 
   server.registerResource(
+    "generated-image",
+    new ResourceTemplate("nai://image/{id}", { list: undefined }),
+    {
+      title: "Generated image",
+      description:
+        "PNG stored from a previous image tool. Pass the image_id to nai_upscale, nai_director, nai_encode_vibe, or nai_get_image. Not listed.",
+      mimeType: "image/png",
+    },
+    async (uri, { id }) => {
+      if (!auth) {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "text/plain",
+              text: "Missing NovelAI Persistent API token.",
+            },
+          ],
+        };
+      }
+      const owner = await artifactOwner(auth);
+      const img = await getImage(env, owner, String(id), "image_id");
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: img.mime,
+            blob: img.base64,
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerResource(
     "image-models",
     "nai://catalog/image-models",
     {
@@ -586,4 +741,44 @@ export function registerNaiTools(
       ],
     }),
   );
+}
+
+async function resolveGenerateInput(
+  env: Env,
+  owner: string,
+  args: GenerateImageInput,
+): Promise<GenerateImageInput> {
+  const image = args.image
+    ? (await resolveImageRef(env, owner, args.image, "image")).base64
+    : undefined;
+  const mask = args.mask
+    ? (await resolveImageRef(env, owner, args.mask, "mask")).base64
+    : undefined;
+  const reference_images = args.reference_images
+    ? await Promise.all(
+        args.reference_images.map(async (ref) => {
+          const resolved = await resolveImageOrVibeRef(
+            env,
+            owner,
+            ref.image,
+            "reference_images",
+          );
+          return {
+            ...ref,
+            image: resolved.image,
+            encoded: resolved.encoded || ref.encoded,
+          };
+        }),
+      )
+    : undefined;
+  const director_references = args.director_references
+    ? await Promise.all(
+        args.director_references.map(async (ref) => ({
+          ...ref,
+          image: (await resolveImageRef(env, owner, ref.image, "director_references"))
+            .base64,
+        })),
+      )
+    : undefined;
+  return { ...args, image, mask, reference_images, director_references };
 }

@@ -92,11 +92,12 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 
 | Tool | Upstream |
 |------|----------|
-| `nai_generate_image` | `image.novelai.net` `/ai/generate-image` (txt2img / img2img / infill, V4.5 characters, vibe, director reference) |
-| `nai_upscale` | `api.novelai.net` `/ai/upscale` |
-| `nai_director` | `image.novelai.net` `/ai/augment-image` |
+| `nai_generate_image` | `image.novelai.net` `/ai/generate-image` (txt2img / img2img / infill, V4.5 characters, vibe, director reference). Returns `image_id`. |
+| `nai_upscale` | `api.novelai.net` `/ai/upscale`. Accepts `image_id` or PNG base64. |
+| `nai_director` | `image.novelai.net` `/ai/augment-image`. Accepts `image_id` or PNG base64. |
+| `nai_get_image` | Reload a stored PNG by `image_id` (for hosts that cannot `resources/read`) |
 | `nai_suggest_tags` | `/ai/generate-image/suggest-tags` |
-| `nai_encode_vibe` | `/ai/encode-vibe` |
+| `nai_encode_vibe` | `/ai/encode-vibe`. Returns `vibe_id` (token stays server-side; repeats are cached). |
 | `nai_chat` | existing OpenAI-compatible chat proxy |
 | `nai_generate_text` | `text.novelai.net` `/ai/generate` |
 | `nai_tokenize` | `/oa/v1/internal/token-count` |
@@ -104,11 +105,15 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_subscription` | `image.novelai.net` `/user/subscription` |
 | `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
 
-Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`.
+Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, and `nai://image/{image_id}` (generated PNGs; not listed).
 
 Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
 
-Image tools return MCP `image` content (PNG). V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless `encoded=true`. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
+Image tools return MCP `image` content (PNG) for the current client UI **and** an `image_id` / `nai://image/...` handle for later tool calls. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, or img2img — not a filename such as `image_0.png`, and not the PNG base64. Artifacts are stored in Workers KV for 24 hours, scoped to the NovelAI token. KV is eventually consistent across PoPs; if an `image_id` miss happens, retry, regenerate, or pass PNG base64.
+
+V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
+
+Tool `ImageContent` can appear in the host's tool-result UI. That is a different channel from the final assistant message; this server cannot promote a tool image into the chat bubble. There is no public HTTPS image CDN.
 
 Not implemented: login/register, encrypted story objects / keystore, module training, `/ai/classify`, stepwise image streaming.
 
