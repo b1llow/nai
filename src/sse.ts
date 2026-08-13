@@ -151,6 +151,7 @@ const CHOICE_KEYS = new Set([
   "message",
   "finish_reason",
   "logprobs",
+  "text",
 ]);
 const TEXT_PART_KEYS = new Set(["role", "content", "refusal"]);
 const USAGE_KEYS = new Set([

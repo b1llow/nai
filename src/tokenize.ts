@@ -2,7 +2,7 @@ import type { Context } from "hono";
 import type { AppEnv } from "./types";
 import { openaiError } from "./errors";
 import { normalizeMessages } from "./content";
-import { NAI_OA, naiFetch, throwMappedUpstreamError } from "./upstream";
+import { NAI_OA, naiFetch, readBodyCapped, throwMappedUpstreamError } from "./upstream";
 import {
   MAX_MODEL_LEN,
   MAX_TOKENIZE_RESPONSE_BYTES,
@@ -132,8 +132,11 @@ export async function handleTokenCount(c: Context<AppEnv>) {
     signal: c.req.raw.signal,
   });
   if (!res.ok) await throwMappedUpstreamError(res);
-  const text = await res.text();
-  if (text.length > MAX_TOKENIZE_RESPONSE_BYTES) {
+  const { text, truncated } = await readBodyCapped(
+    res,
+    MAX_TOKENIZE_RESPONSE_BYTES,
+  );
+  if (truncated) {
     throw openaiError(502, "unexpected upstream token-count response", {
       type: "api_error",
       code: "upstream_error",

@@ -119,7 +119,7 @@ export function sanitizeChatBody(raw: unknown): {
   };
 
   for (const key of PASS_THROUGH_KEYS) {
-    if (req[key] !== undefined) {
+    if (req[key] !== undefined && req[key] !== null) {
       const value = sanitizePassThrough(key, req[key]);
       if (value !== undefined) body[key] = value;
     }
@@ -481,6 +481,23 @@ export function pipeChatStream(
     } catch (err) {
       if (err instanceof SseLimitError && !wroteDone) {
         try {
+          await writer.write(
+            encoder.encode(
+              formatSseData({
+                id: meta.id,
+                object: "chat.completion.chunk",
+                created: meta.created,
+                model: meta.model,
+                choices: [
+                  {
+                    index: 0,
+                    delta: {},
+                    finish_reason: "length",
+                  },
+                ],
+              }),
+            ),
+          );
           await writer.write(encoder.encode(SSE_DONE));
           await writer.close();
           return;

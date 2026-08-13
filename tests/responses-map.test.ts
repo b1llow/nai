@@ -208,4 +208,19 @@ describe("responses stream helpers", () => {
     });
     expect(obj.output[0]!.content[0]!.text).toBe("hi");
   });
+
+  it("marks truncated responses as incomplete", () => {
+    const obj = buildResponseObject({
+      id: "resp_x",
+      model: "m",
+      created_at: 1,
+      status: "incomplete",
+      text: "hi",
+      messageId: "msg_x",
+      incomplete_reason: "max_output_tokens",
+    });
+    expect(obj.status).toBe("incomplete");
+    expect(obj.incomplete_details).toEqual({ reason: "max_output_tokens" });
+    expect(obj.output[0]!.status).toBe("incomplete");
+  });
 });

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeChatBody } from "../src/chat";
+import { pipeChatStream, sanitizeChatBody } from "../src/chat";
 import { normalizeMessages } from "../src/content";
 import { HttpError, mapNaiError } from "../src/errors";
 import { MAX_MESSAGES, MAX_TOKENS } from "../src/limits";
 import { parseSseJson, SseLimitError, stripNaiFields } from "../src/sse";
 import { sanitizeTokenCountResponse } from "../src/tokenize";
+import { readBodyCapped } from "../src/upstream";
 
 describe("mapNaiError sanitization", () => {
   it("drops oversized or HTML JSON messages", () => {
@@ -50,6 +51,23 @@ describe("sanitizeChatBody", () => {
       }),
     ).toThrow(HttpError);
   });
+
+  it("treats null optional sampling fields as unset", () => {
+    const { body } = sanitizeChatBody({
+      model: "xialong-v1",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: null,
+      top_p: null,
+      max_tokens: null,
+      stop: null,
+      logit_bias: null,
+    });
+    expect(body).not.toHaveProperty("temperature");
+    expect(body).not.toHaveProperty("top_p");
+    expect(body).not.toHaveProperty("max_tokens");
+    expect(body).not.toHaveProperty("stop");
+    expect(body).not.toHaveProperty("logit_bias");
+  });
 });
 
 describe("normalizeMessages limits", () => {
@@ -89,6 +107,16 @@ describe("stripNaiFields allowlist", () => {
     });
     expect(cleaned).not.toHaveProperty("account_id");
   });
+
+  it("keeps choices[].text for completion-style chunks", () => {
+    const cleaned = stripNaiFields({
+      id: "x",
+      choices: [{ index: 0, text: "Hello", finish_reason: "stop" }],
+    });
+    expect(cleaned.choices).toEqual([
+      { index: 0, text: "Hello", finish_reason: "stop" },
+    ]);
+  });
 });
 
 describe("parseSseJson limits", () => {
@@ -121,5 +149,36 @@ describe("sanitizeTokenCountResponse", () => {
 
   it("rejects payloads without a count", () => {
     expect(() => sanitizeTokenCountResponse({ prompt: "x" })).toThrow(HttpError);
+  });
+});
+
+describe("readBodyCapped", () => {
+  it("stops reading once the byte limit is reached", async () => {
+    const payload = "x".repeat(64);
+    const res = new Response(payload);
+    const { text, truncated } = await readBodyCapped(res, 16);
+    expect(truncated).toBe(true);
+    expect(new TextEncoder().encode(text).byteLength).toBe(16);
+  });
+});
+
+describe("pipeChatStream", () => {
+  it("emits finish_reason length when the SSE buffer limit is hit", async () => {
+    const huge = "data: " + "a".repeat(300_000);
+    const upstream = new Response(huge, {
+      headers: { "Content-Type": "text/event-stream" },
+    });
+    const res = pipeChatStream(upstream, {
+      id: "chatcmpl-x",
+      created: 1,
+      model: "m",
+    });
+    const events: Array<Record<string, unknown>> = [];
+    for await (const obj of parseSseJson(res.body!)) {
+      events.push(obj as Record<string, unknown>);
+    }
+    const last = events[events.length - 1]!;
+    const choices = last.choices as Array<Record<string, unknown>>;
+    expect(choices[0]!.finish_reason).toBe("length");
   });
 });

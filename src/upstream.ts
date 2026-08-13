@@ -18,14 +18,15 @@ function correlationId(): string {
   return out;
 }
 
-async function readBodyCapped(
+export async function readBodyCapped(
   res: Response,
   maxBytes: number,
-): Promise<string> {
-  if (!res.body) return "";
+): Promise<{ text: string; truncated: boolean }> {
+  if (!res.body) return { text: "", truncated: false };
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let truncated = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -33,6 +34,7 @@ async function readBodyCapped(
       if (!value) continue;
       const remaining = maxBytes - size;
       if (remaining <= 0) {
+        truncated = true;
         try {
           await reader.cancel();
         } catch {
@@ -43,6 +45,7 @@ async function readBodyCapped(
       if (value.byteLength > remaining) {
         chunks.push(value.slice(0, remaining));
         size += remaining;
+        truncated = true;
         try {
           await reader.cancel();
         } catch {
@@ -66,7 +69,7 @@ async function readBodyCapped(
     merged.set(c, offset);
     offset += c.byteLength;
   }
-  return new TextDecoder().decode(merged);
+  return { text: new TextDecoder().decode(merged), truncated };
 }
 
 export async function naiFetch(
@@ -121,7 +124,7 @@ export async function throwMappedUpstreamError(res: Response): Promise<never> {
   let body: unknown = null;
   const ct = res.headers.get("content-type") ?? "";
   try {
-    const text = await readBodyCapped(res, MAX_ERROR_BODY_BYTES);
+    const { text } = await readBodyCapped(res, MAX_ERROR_BODY_BYTES);
     if (text) {
       try {
         body = JSON.parse(text);

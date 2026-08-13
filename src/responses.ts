@@ -250,24 +250,31 @@ export function buildResponseObject(opts: {
   id: string;
   model: string;
   created_at: number;
-  status: "completed" | "in_progress" | "failed";
+  status: "completed" | "in_progress" | "failed" | "incomplete";
   text: string;
   messageId: string;
   usage?: ChatCompletion["usage"] | null;
   error?: { code: string | null; message: string } | null;
+  incomplete_reason?: string | null;
 }) {
   const usage = opts.usage ?? {
     prompt_tokens: 0,
     completion_tokens: 0,
     total_tokens: 0,
   };
+  const outputStatus =
+    opts.status === "failed" || opts.status === "incomplete"
+      ? "incomplete"
+      : "completed";
   return {
     id: opts.id,
     object: "response" as const,
     created_at: opts.created_at,
     status: opts.status,
     error: opts.error ?? null,
-    incomplete_details: null,
+    incomplete_details: opts.incomplete_reason
+      ? { reason: opts.incomplete_reason }
+      : null,
     model: opts.model,
     output:
       opts.status === "in_progress" && !opts.text
@@ -277,7 +284,7 @@ export function buildResponseObject(opts: {
               id: opts.messageId,
               type: "message" as const,
               role: "assistant" as const,
-              status: opts.status === "failed" ? "incomplete" : "completed",
+              status: outputStatus,
               content: [
                 {
                   type: "output_text" as const,
@@ -343,16 +350,19 @@ export async function handleResponses(c: Context<AppEnv>) {
         });
       }
       const text = result.completion.choices[0]?.message.content ?? "";
+      const truncated =
+        result.completion.choices[0]?.finish_reason === "length";
       detach();
       return c.json(
         buildResponseObject({
           id: responseId,
           model: result.completion.model,
           created_at,
-          status: "completed",
+          status: truncated ? "incomplete" : "completed",
           text,
           messageId,
           usage: result.completion.usage,
+          incomplete_reason: truncated ? "max_output_tokens" : null,
         }),
       );
     }
@@ -372,6 +382,7 @@ export async function handleResponses(c: Context<AppEnv>) {
         model: result.completion.model,
         text,
         usage: result.completion.usage,
+        truncated: result.completion.choices[0]?.finish_reason === "length",
         clientSignal: c.req.raw.signal,
         upstreamAbort: ac,
         onDone: detach,
@@ -404,6 +415,7 @@ export function streamResponsesFromText(opts: {
   model: string;
   text: string;
   usage: ChatCompletion["usage"];
+  truncated?: boolean;
   clientSignal?: AbortSignal;
   upstreamAbort?: AbortController;
   onDone?: () => void;
@@ -536,7 +548,7 @@ export function streamResponsesFromText(opts: {
               id: opts.messageId,
               type: "message",
               role: "assistant",
-              status: "completed",
+              status: opts.truncated ? "incomplete" : "completed",
               content: [
                 {
                   type: "output_text",
@@ -549,20 +561,24 @@ export function streamResponsesFromText(opts: {
           }),
         ),
       );
-      const completed = buildResponseObject({
+      const terminal = buildResponseObject({
         id: opts.responseId,
         model: opts.model,
         created_at: opts.created_at,
-        status: "completed",
+        status: opts.truncated ? "incomplete" : "completed",
         text: opts.text,
         messageId: opts.messageId,
         usage: opts.usage,
+        incomplete_reason: opts.truncated ? "max_output_tokens" : null,
       });
+      const terminalType = opts.truncated
+        ? "response.incomplete"
+        : "response.completed";
       await writer.write(
         encoder.encode(
-          formatSseEvent("response.completed", {
-            type: "response.completed",
-            response: completed,
+          formatSseEvent(terminalType, {
+            type: terminalType,
+            response: terminal,
             sequence_number: seq++,
           }),
         ),
@@ -627,6 +643,7 @@ export function streamResponsesFromChat(opts: {
     let fullText = "";
     let usage: ChatCompletion["usage"] | null = null;
     let model = opts.model;
+    let truncated = false;
 
     try {
       const base = buildResponseObject({
@@ -733,6 +750,7 @@ export function streamResponsesFromChat(opts: {
                   ),
                 );
               }
+              truncated = true;
               break;
             }
             fullText += content;
@@ -751,6 +769,7 @@ export function streamResponsesFromChat(opts: {
           }
         } catch (err) {
           if (!(err instanceof SseLimitError)) throw err;
+          truncated = true;
         }
       }
 
@@ -791,7 +810,7 @@ export function streamResponsesFromChat(opts: {
               id: opts.messageId,
               type: "message",
               role: "assistant",
-              status: "completed",
+              status: truncated ? "incomplete" : "completed",
               content: [
                 {
                   type: "output_text",
@@ -805,20 +824,24 @@ export function streamResponsesFromChat(opts: {
         ),
       );
 
-      const completed = buildResponseObject({
+      const terminal = buildResponseObject({
         id: opts.responseId,
         model,
         created_at: opts.created_at,
-        status: "completed",
+        status: truncated ? "incomplete" : "completed",
         text: fullText,
         messageId: opts.messageId,
         usage,
+        incomplete_reason: truncated ? "max_output_tokens" : null,
       });
+      const terminalType = truncated
+        ? "response.incomplete"
+        : "response.completed";
       await writer.write(
         encoder.encode(
-          formatSseEvent("response.completed", {
-            type: "response.completed",
-            response: completed,
+          formatSseEvent(terminalType, {
+            type: terminalType,
+            response: terminal,
             sequence_number: seq++,
           }),
         ),
