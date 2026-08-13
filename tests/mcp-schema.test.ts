@@ -1,0 +1,118 @@
+import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { RESOLUTION_PRESET_IDS } from "../src/nai/catalog";
+import { createNaiMcpServer, handleMcp } from "../src/mcp/server";
+import { naiGenerateImageInputSchema } from "../src/mcp/tools";
+import { testEnv, testExecutionContext } from "./helpers";
+
+function jsonSchemaEnum(schema: unknown): string[] | undefined {
+  if (!schema || typeof schema !== "object") return undefined;
+  const enumValues = (schema as { enum?: unknown }).enum;
+  if (!Array.isArray(enumValues)) return undefined;
+  return enumValues.filter((v): v is string => typeof v === "string");
+}
+
+describe("nai_generate_image input schema", () => {
+  it("accepts preset names and numeric width/height", () => {
+    expect(
+      naiGenerateImageInputSchema.safeParse({
+        prompt: "1girl",
+        resolution: "normal_portrait",
+      }).success,
+    ).toBe(true);
+    expect(
+      naiGenerateImageInputSchema.safeParse({
+        prompt: "1girl",
+        width: 1024,
+        height: 1024,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects 1024x1024, portrait, and other non-preset size strings", () => {
+    for (const resolution of ["1024x1024", "portrait", "512x768", "landscape"]) {
+      const parsed = naiGenerateImageInputSchema.safeParse({
+        prompt: "1girl",
+        resolution,
+      });
+      expect(parsed.success).toBe(false);
+    }
+  });
+
+  it("exposes resolution as a preset enum in JSON Schema", () => {
+    const schema = z.toJSONSchema(naiGenerateImageInputSchema);
+    const resolution = (schema as { properties?: { resolution?: unknown } })
+      .properties?.resolution;
+    const values = jsonSchemaEnum(resolution);
+    expect(values).toEqual([...RESOLUTION_PRESET_IDS]);
+    expect(values).toContain("normal_portrait");
+    expect(values).not.toContain("1024x1024");
+    expect(values).not.toContain("portrait");
+  });
+});
+
+describe("MCP tools/list schemas", () => {
+  it("advertises resolution enum and outputSchema on every tool", async () => {
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const server = createNaiMcpServer(testEnv(), "Bearer header-token-xx");
+    const client = new Client({ name: "schema-test", version: "0.0.1" });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.length).toBeGreaterThan(0);
+      for (const tool of tools) {
+        expect(tool.outputSchema, tool.name).toBeDefined();
+        expect(tool.outputSchema?.type, tool.name).toBe("object");
+      }
+
+      const generate = tools.find((t) => t.name === "nai_generate_image");
+      expect(generate).toBeDefined();
+      const resolution = generate?.inputSchema.properties?.resolution;
+      const values = jsonSchemaEnum(resolution);
+      expect(values).toContain("normal_portrait");
+      expect(values).not.toContain("1024x1024");
+      expect(values).not.toContain("portrait");
+      expect(generate?.outputSchema?.properties).toMatchObject({
+        seed: { type: "number" },
+        files: { type: "array" },
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("returns the same schemas over HTTP with a Bearer token", async () => {
+    const env = testEnv();
+    const ctx = testExecutionContext();
+    const transport = new StreamableHTTPClientTransport(
+      new URL("https://nai.hoshinoaya.com/mcp"),
+      {
+        requestInit: {
+          headers: { Authorization: "Bearer header-token-xx" },
+        },
+        fetch: (input, init) => {
+          const request = new Request(input, init);
+          return handleMcp(request, env, ctx);
+        },
+      },
+    );
+    const client = new Client({ name: "http-schema-test", version: "0.0.1" });
+    await client.connect(transport);
+    try {
+      const { tools } = await client.listTools();
+      const generate = tools.find((t) => t.name === "nai_generate_image");
+      expect(
+        jsonSchemaEnum(generate?.inputSchema.properties?.resolution),
+      ).toContain("normal_portrait");
+      expect(generate?.outputSchema).toBeDefined();
+    } finally {
+      await client.close();
+    }
+  });
+});

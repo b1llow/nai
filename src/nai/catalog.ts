@@ -48,22 +48,53 @@ export const IMAGE_MODELS: ImageModelInfo[] = [
   },
 ];
 
-export const RESOLUTION_PRESETS: Record<string, { width: number; height: number }> =
-  {
-    small_portrait: { width: 512, height: 768 },
-    small_landscape: { width: 768, height: 512 },
-    small_square: { width: 640, height: 640 },
-    normal_portrait: { width: 832, height: 1216 },
-    normal_landscape: { width: 1216, height: 832 },
-    normal_square: { width: 1024, height: 1024 },
-    large_portrait: { width: 1024, height: 1536 },
-    large_landscape: { width: 1536, height: 1024 },
-    large_square: { width: 1472, height: 1472 },
-    wallpaper_portrait: { width: 1088, height: 1920 },
-    wallpaper_landscape: { width: 1920, height: 1088 },
-  };
+export const RESOLUTION_PRESET_IDS = [
+  "small_portrait",
+  "small_landscape",
+  "small_square",
+  "normal_portrait",
+  "normal_landscape",
+  "normal_square",
+  "large_portrait",
+  "large_landscape",
+  "large_square",
+  "wallpaper_portrait",
+  "wallpaper_landscape",
+] as const;
 
-export const DEFAULT_RESOLUTION = "normal_portrait";
+export type ResolutionPresetId = (typeof RESOLUTION_PRESET_IDS)[number];
+
+export const RESOLUTION_PRESETS: Record<
+  ResolutionPresetId,
+  { width: number; height: number }
+> = {
+  small_portrait: { width: 512, height: 768 },
+  small_landscape: { width: 768, height: 512 },
+  small_square: { width: 640, height: 640 },
+  normal_portrait: { width: 832, height: 1216 },
+  normal_landscape: { width: 1216, height: 832 },
+  normal_square: { width: 1024, height: 1024 },
+  large_portrait: { width: 1024, height: 1536 },
+  large_landscape: { width: 1536, height: 1024 },
+  large_square: { width: 1472, height: 1472 },
+  wallpaper_portrait: { width: 1088, height: 1920 },
+  wallpaper_landscape: { width: 1920, height: 1088 },
+};
+
+export const DEFAULT_RESOLUTION: ResolutionPresetId = "normal_portrait";
+
+export function isResolutionPresetId(value: string): value is ResolutionPresetId {
+  return (RESOLUTION_PRESET_IDS as readonly string[]).includes(value);
+}
+
+/** JSON Schema / tool describe: preset names, not WxH or "portrait". */
+export function resolutionPresetDescribe(): string {
+  const listed = RESOLUTION_PRESET_IDS.map((id) => {
+    const { width, height } = RESOLUTION_PRESETS[id];
+    return `${id} (${width}x${height})`;
+  }).join(", ");
+  return `NovelAI size preset name, default normal_portrait (832x1216). Allowed: ${listed}. Do not pass 1024x1024, portrait, landscape, or any WxH string. Custom size: set numeric width and height instead (64–1920, multiples of 64).`;
+}
 
 export const SAMPLERS = [
   "k_euler_ancestral",

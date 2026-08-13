@@ -12,6 +12,7 @@ import {
   align64,
   clampDim,
   inpaintingModel,
+  isResolutionPresetId,
   isV4Model,
 } from "./catalog";
 import { decodeUserImage, clampPrompt } from "./image-input";
@@ -123,7 +124,9 @@ function resolveSize(input: GenerateImageInput): { width: number; height: number
     return { width: clampDim(w), height: clampDim(h) };
   }
   const presetName = input.resolution ?? DEFAULT_RESOLUTION;
-  const preset = RESOLUTION_PRESETS[presetName];
+  const preset = isResolutionPresetId(presetName)
+    ? RESOLUTION_PRESETS[presetName]
+    : undefined;
   if (!preset) {
     throw openaiError(400, "unknown resolution preset", {
       type: "invalid_request_error",

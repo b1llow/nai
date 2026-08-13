@@ -8,15 +8,26 @@ export type McpContent = McpText | McpImage | McpAudio;
 
 export type McpToolResult = {
   content: McpContent[];
+  structuredContent?: Record<string, unknown>;
   isError?: boolean;
 };
+
+export function asStructuredContent(value: unknown): Record<string, unknown> {
+  if (Array.isArray(value)) return { items: value };
+  if (value && typeof value === "object") return value as Record<string, unknown>;
+  return { value };
+}
 
 export function mcpText(text: string): McpToolResult {
   return { content: [{ type: "text", text }] };
 }
 
 export function mcpJson(value: unknown): McpToolResult {
-  return mcpText(JSON.stringify(value, null, 2));
+  const structuredContent = asStructuredContent(value);
+  return {
+    content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+    structuredContent,
+  };
 }
 
 export function mcpNeedAuth(): McpToolResult {
@@ -62,7 +73,7 @@ export function mcpError(err: unknown): McpToolResult {
 }
 
 export function withImages(
-  meta: unknown,
+  meta: Record<string, unknown>,
   images: Array<{ name: string; base64: string; mimeType?: string }>,
 ): McpToolResult {
   const content: McpContent[] = [
@@ -75,7 +86,7 @@ export function withImages(
       mimeType: img.mimeType ?? "image/png",
     });
   }
-  return { content };
+  return { content, structuredContent: meta };
 }
 
 export async function runTool(
