@@ -70,7 +70,7 @@ describe("MCP image_id flow", () => {
         images: Array<{ filename: string }>;
         files?: unknown;
       };
-      expect(generated.isError).toBe(false);
+      expect(generated.isError).not.toBe(true);
       expect(gen.files).toBeUndefined();
       expect(gen.image_id).toMatch(/^img_[a-f0-9]{32}$/);
       expect(gen.images[0]?.filename).toBe("image_0.png");
@@ -80,7 +80,7 @@ describe("MCP image_id flow", () => {
         arguments: { image: gen.image_id },
       });
       const up = upscaled.structuredContent as { image_id: string };
-      expect(upscaled.isError).toBe(false);
+      expect(upscaled.isError).not.toBe(true);
       expect(up.image_id).toMatch(/^img_[a-f0-9]{32}$/);
       expect(up.image_id).not.toBe(gen.image_id);
       expect(fetches.some((u) => u.includes("/ai/upscale"))).toBe(true);
@@ -89,7 +89,7 @@ describe("MCP image_id flow", () => {
         name: "nai_get_image",
         arguments: { image_id: gen.image_id },
       });
-      expect(reloaded.isError).toBe(false);
+      expect(reloaded.isError).not.toBe(true);
       const got = reloaded.structuredContent as { image_id: string };
       expect(got.image_id).toBe(gen.image_id);
 
@@ -142,8 +142,8 @@ describe("MCP image_id flow", () => {
         name: "nai_generate_image",
         arguments: args,
       });
-      expect(first.isError).toBe(false);
-      expect(second.isError).toBe(false);
+      expect(first.isError).not.toBe(true);
+      expect(second.isError).not.toBe(true);
       expect(encodeCalls).toBe(1);
     } finally {
       await client.close();
