@@ -121,6 +121,15 @@ npm run deploy
 
 Custom domain in this repo: `nai.hoshinoaya.com` (see `wrangler.jsonc` `routes`).
 
+Pushes to `main` also deploy via GitHub Actions (`.github/workflows/ci.yml`) after tests pass. Add these repository secrets under **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+|--------|--------|
+| `CLOUDFLARE_API_TOKEN` | API token from the [Edit Cloudflare Workers](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/) template. Include the zone that serves `nai.hoshinoaya.com`. |
+| `CLOUDFLARE_ACCOUNT_ID` | Account ID from the Workers overview page |
+
+After the secrets exist, a push to `main` (or **Actions → CI → Run workflow** on `main`) deploys the Worker. Do not also enable Cloudflare Workers Builds on this repo unless you disable the Actions deploy job — both would publish on every push.
+
 ## Client usage
 
 ### curl
