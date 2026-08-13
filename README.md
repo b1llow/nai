@@ -1,8 +1,11 @@
 # nai
 
-OpenAI-compatible proxy in front of [NovelAI](https://novelai.net) text APIs. Runs on Cloudflare Workers (Hono).
+OpenAI-compatible proxy **and** remote MCP server in front of [NovelAI](https://novelai.net). Runs on Cloudflare Workers (Hono + `createMcpHandler`).
 
-Point any OpenAI SDK / client at this worker, pass your NovelAI access token as a Bearer key, and call the usual `/v1/*` endpoints.
+- Point any OpenAI SDK / client at `/v1/*`, pass your NovelAI access token as a Bearer key.
+- Point an MCP client at `/mcp` for image generation, Director tools, story text, TTS, and account queries.
+
+This project is **not** affiliated with NovelAI / Anlatan. You need your own NovelAI account and **Persistent API token**. Respect NovelAI’s terms of service. Third-party clients must not collect NovelAI email/password.
 
 ## Why this proxy?
 
@@ -17,14 +20,13 @@ NovelAI exposes a text API that is *almost* OpenAI-shaped (`/oa/v1/...`), but no
 
 In short: keep using the NovelAI models you pay for, without rewriting every client or maintaining per-app adapters.
 
-This project is **not** affiliated with NovelAI / Anlatan. You need your own NovelAI account and access token. Respect NovelAI’s terms of service.
-
 ## Endpoints
 
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/` | Service info |
 | `GET` | `/health` | Liveness |
+| `POST`/`GET` | `/mcp` | Remote MCP (Streamable HTTP) |
 | `GET` | `/v1/models` | Model list (upstream, with static fallback) |
 | `GET` | `/v1/models/:id` | Single model |
 | `POST` | `/v1/chat/completions` | Chat Completions (stream + non-stream) |
@@ -39,6 +41,57 @@ Authorization: Bearer <novelai-access-token>
 ```
 
 The header is forwarded upstream unchanged.
+
+## MCP server
+
+`POST https://nai.hoshinoaya.com/mcp` (Streamable HTTP). Auth is a NovelAI Persistent API token:
+
+1. `Authorization: Bearer <token>` on the MCP HTTP request (same as `/v1`)
+2. Or Worker secret `NAI_ACCESS_TOKEN` when the client cannot set headers
+
+Create a persistent token in the NovelAI account settings. Do not send email/password to this worker.
+
+Cursor / Claude Desktop via `mcp-remote`:
+
+```json
+{
+  "mcpServers": {
+    "novelai": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://nai.hoshinoaya.com/mcp",
+        "--header",
+        "Authorization: Bearer ${NAI_TOKEN}"
+      ]
+    }
+  }
+}
+```
+
+### Tools
+
+| Tool | Upstream |
+|------|----------|
+| `nai_generate_image` | `image.novelai.net` `/ai/generate-image` (txt2img / img2img / infill, V4.5 characters, vibe, director reference) |
+| `nai_upscale` | `api.novelai.net` `/ai/upscale` |
+| `nai_director` | `image.novelai.net` `/ai/augment-image` |
+| `nai_suggest_tags` | `/ai/generate-image/suggest-tags` |
+| `nai_encode_vibe` | `/ai/encode-vibe` |
+| `nai_chat` | existing OpenAI-compatible chat proxy |
+| `nai_generate_text` | `text.novelai.net` `/ai/generate` |
+| `nai_tokenize` | `/oa/v1/internal/token-count` |
+| `nai_generate_voice` | `/ai/generate-voice` |
+| `nai_subscription` | `/user/subscription` |
+| `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
+
+Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`.
+
+Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
+
+Image tools return MCP `image` content (PNG). V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless `encoded=true`. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
+
+Not implemented: login/register, encrypted story objects / keystore, module training, `/ai/classify`, stepwise image streaming.
 
 ## Supported models
 
@@ -87,7 +140,9 @@ npm install
 
 ```jsonc
 "vars": {
-  "NAI_BASE_URL": "https://text.novelai.net"
+  "NAI_BASE_URL": "https://text.novelai.net",
+  "NAI_IMAGE_BASE_URL": "https://image.novelai.net",
+  "NAI_API_BASE_URL": "https://api.novelai.net"
 }
 ```
 
@@ -96,6 +151,10 @@ Override locally with `.dev.vars` (gitignored):
 ```bash
 # .dev.vars
 NAI_BASE_URL=https://text.novelai.net
+NAI_IMAGE_BASE_URL=https://image.novelai.net
+NAI_API_BASE_URL=https://api.novelai.net
+# optional MCP fallback:
+# NAI_ACCESS_TOKEN=your_persistent_token
 ```
 
 ### Dev
@@ -188,14 +247,16 @@ const completion = await client.chat.completions.create({
 ## Architecture
 
 ```
-Client (OpenAI SDK / ST / curl)
+Client (OpenAI SDK / ST / curl / MCP)
         │  Bearer NAI token
         ▼
-   Cloudflare Worker (Hono)
-     auth gate → route handlers
+   Cloudflare Worker
+     /v1/*  Hono OpenAI proxy
+     /mcp   createMcpHandler (stateless)
         │
-        ▼
-   text.novelai.net  /oa/v1/*
+        ├── text.novelai.net   /oa/v1/*  /ai/generate
+        ├── image.novelai.net  /ai/generate-image  /ai/augment-image  /ai/encode-vibe
+        └── api.novelai.net    /user/subscription  /ai/upscale  /ai/generate-voice
 ```
 
 | Area | Module |
@@ -209,6 +270,8 @@ Client (OpenAI SDK / ST / curl)
 | SSE parse / aggregate / strip NAI fields | `src/sse.ts` |
 | Message content flatten | `src/content.ts` |
 | OpenAI error mapping | `src/errors.ts` |
+| MCP tools / handler | `src/mcp/` |
+| Image / Director / TTS | `src/nai/` |
 
 Chat and Responses always request `stream: true` from NovelAI. Non-stream clients get a fully aggregated `chat.completion` / `response` object. Streaming clients receive stripped OpenAI-shaped SSE (`token_ids` and other NAI-only fields removed).
 
@@ -216,13 +279,16 @@ Chat and Responses always request `stream: true` from NovelAI. Non-stream client
 
 | Binding | Required | Description |
 |---------|----------|-------------|
-| `NAI_BASE_URL` | yes | NovelAI text API origin. Must be `https://text.novelai.net` or `https://api.novelai.net` (default in wrangler: `https://text.novelai.net`) |
+| `NAI_BASE_URL` | yes | NovelAI text API origin. Must be `https://text.novelai.net` or `https://api.novelai.net` (default: `https://text.novelai.net`) |
+| `NAI_IMAGE_BASE_URL` | yes | Image API origin. Must be `https://image.novelai.net` |
+| `NAI_API_BASE_URL` | yes | Account / upscale / TTS origin. Must be `https://api.novelai.net` |
+| `NAI_ACCESS_TOKEN` | no | Optional Worker secret; MCP fallback when the request has no Authorization header (`wrangler secret put NAI_ACCESS_TOKEN`) |
 | `NAI_ALLOW_UNSAFE_BASE_URL` | no | Set to `1` only for local mocks; skips the host allowlist but still requires `http(s)` and rejects URLs with credentials |
-| `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` |
+| `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` and `/mcp` |
 
-Authenticated `/v1/*` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB. Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
+Authenticated `/v1/*` and `/mcp` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB on `/v1` and 20 MiB on `/mcp` (img2img). Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
 
-No server-side API key is stored; callers supply the NovelAI token per request. Tokens must be printable ASCII Bearer credentials (8–4096 chars).
+Callers normally supply the NovelAI token per request. An optional Worker secret is only for MCP clients that cannot set headers. Tokens must be printable ASCII Bearer credentials (8–4096 chars).
 
 ## License
 

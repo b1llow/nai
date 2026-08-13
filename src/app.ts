@@ -3,12 +3,14 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import type { AppEnv } from "./types";
 import { HttpError, openaiError } from "./errors";
+import { errorMessage, logError } from "./log";
 import { handleChatCompletions } from "./chat";
 import { handleResponses } from "./responses";
 import { listModels, getModel } from "./models";
 import { handleTokenCount } from "./tokenize";
 import { parseAuthorization } from "./auth";
 import { MAX_BODY_BYTES, safeIdent } from "./limits";
+import { enforceIpRateLimit } from "./ratelimit";
 
 const app = new Hono<AppEnv>();
 
@@ -59,25 +61,7 @@ app.use("/v1/*", async (c, next) => {
 
 app.use("/v1/*", async (c, next) => {
   if (c.req.method === "OPTIONS") return next();
-  const limiter = c.env.API_RATE_LIMIT;
-  if (!limiter) return next();
-  const ip =
-    c.req.header("cf-connecting-ip") ||
-    c.req.header("x-real-ip") ||
-    "unknown";
-  try {
-    const { success } = await limiter.limit({ key: ip });
-    if (!success) {
-      throw openaiError(429, "Rate limit exceeded", {
-        type: "rate_limit_error",
-        code: "rate_limit_exceeded",
-        headers: { "Retry-After": "60" },
-      });
-    }
-  } catch (err) {
-    if (err instanceof HttpError) throw err;
-    // Binding missing or platform error: fail open so a limiter outage is not a 500.
-  }
+  await enforceIpRateLimit(c.env, c.req.raw);
   await next();
 });
 
@@ -103,6 +87,7 @@ app.get("/", (c) =>
   c.json({
     name: "nai-openai-proxy",
     endpoints: [
+      "/mcp",
       "/v1/models",
       "/v1/chat/completions",
       "/v1/responses",
@@ -141,9 +126,9 @@ app.onError((err, c) => {
     }
     return c.json(err.toJSON(), err.status as 400);
   }
-  console.error({
+  logError({
     message: "unhandled error",
-    error: err instanceof Error ? err.message : "non-error thrown",
+    error: errorMessage(err),
     path: c.req.path,
   });
   return c.json(

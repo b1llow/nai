@@ -1,7 +1,11 @@
 import type { Env } from "./env";
-import { resolveNaiBaseUrl } from "./env";
+import { resolveNaiOrigin } from "./env";
 import { mapNaiError, openaiError } from "./errors";
-import { MAX_ERROR_BODY_BYTES } from "./limits";
+import {
+  MAX_ERROR_BODY_BYTES,
+  isAllowedNaiPath,
+  type NaiHostKind,
+} from "./limits";
 
 export const NAI_OA = {
   models: "/oa/v1/models",
@@ -9,6 +13,11 @@ export const NAI_OA = {
   completions: "/oa/v1/completions",
   tokenCount: "/oa/v1/internal/token-count",
 } as const;
+
+export const NAI_ACCEPT_JSON = "application/json";
+export const NAI_ACCEPT_SSE = "text/event-stream";
+export const NAI_ACCEPT_BINARY =
+  "application/x-zip-compressed, application/zip, application/octet-stream, image/png, audio/mpeg, audio/webm, application/json";
 
 function correlationId(): string {
   const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -18,11 +27,11 @@ function correlationId(): string {
   return out;
 }
 
-export async function readBodyCapped(
+export async function readBytesCapped(
   res: Response,
   maxBytes: number,
-): Promise<{ text: string; truncated: boolean }> {
-  if (!res.body) return { text: "", truncated: false };
+): Promise<{ bytes: Uint8Array; truncated: boolean }> {
+  if (!res.body) return { bytes: new Uint8Array(0), truncated: false };
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -69,31 +78,46 @@ export async function readBodyCapped(
     merged.set(c, offset);
     offset += c.byteLength;
   }
-  return { text: new TextDecoder().decode(merged), truncated };
+  return { bytes: merged, truncated };
 }
+
+export async function readBodyCapped(
+  res: Response,
+  maxBytes: number,
+): Promise<{ text: string; truncated: boolean }> {
+  const { bytes, truncated } = await readBytesCapped(res, maxBytes);
+  return { text: new TextDecoder().decode(bytes), truncated };
+}
+
+export type NaiFetchInit = {
+  method?: string;
+  auth: string;
+  body?: unknown;
+  signal?: AbortSignal;
+  stream?: boolean;
+  host?: NaiHostKind;
+  accept?: string;
+};
 
 export async function naiFetch(
   env: Env,
   path: string,
-  init: {
-    method?: string;
-    auth: string;
-    body?: unknown;
-    signal?: AbortSignal;
-    stream?: boolean;
-  },
+  init: NaiFetchInit,
 ): Promise<Response> {
-  if (!path.startsWith("/oa/v1/")) {
+  const host: NaiHostKind = init.host ?? "text";
+  if (!isAllowedNaiPath(host, path)) {
     throw openaiError(500, "Server misconfigured", {
       type: "api_error",
       code: "internal_error",
     });
   }
-  const base = resolveNaiBaseUrl(env);
+  const base = resolveNaiOrigin(env, host);
   const url = `${base}${path}`;
   const headers: Record<string, string> = {
     Authorization: init.auth,
-    Accept: init.stream ? "text/event-stream" : "application/json",
+    Accept:
+      init.accept ??
+      (init.stream ? NAI_ACCEPT_SSE : NAI_ACCEPT_JSON),
     "x-correlation-id": correlationId(),
   };
   if (init.body !== undefined) {
@@ -157,4 +181,51 @@ export async function throwMappedUpstreamError(res: Response): Promise<never> {
     body = null;
   }
   throw mapNaiError(res.status, body, res.headers);
+}
+
+export async function naiFetchBinary(
+  env: Env,
+  path: string,
+  init: NaiFetchInit,
+  maxBytes: number,
+): Promise<Uint8Array> {
+  const res = await naiFetch(env, path, {
+    ...init,
+    accept: init.accept ?? NAI_ACCEPT_BINARY,
+  });
+  if (!res.ok) await throwMappedUpstreamError(res);
+  const { bytes, truncated } = await readBytesCapped(res, maxBytes);
+  if (truncated) {
+    throw openaiError(502, "upstream response too large", {
+      type: "api_error",
+      code: "upstream_error",
+    });
+  }
+  return bytes;
+}
+
+export async function naiFetchJson(
+  env: Env,
+  path: string,
+  init: NaiFetchInit,
+  maxBytes: number,
+): Promise<unknown> {
+  const res = await naiFetch(env, path, init);
+  if (!res.ok) await throwMappedUpstreamError(res);
+  const { text, truncated } = await readBodyCapped(res, maxBytes);
+  if (truncated) {
+    throw openaiError(502, "upstream response too large", {
+      type: "api_error",
+      code: "upstream_error",
+    });
+  }
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw openaiError(502, "unexpected upstream JSON", {
+      type: "api_error",
+      code: "upstream_error",
+    });
+  }
 }

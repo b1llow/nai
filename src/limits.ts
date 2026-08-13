@@ -24,8 +24,37 @@ export const MAX_TOKENIZE_RESPONSE_BYTES = 16_384;
 export const MAX_MODELS_RESPONSE_BYTES = 256_000;
 export const MAX_CHAT_JSON_BYTES = 1024 * 1024;
 export const RATE_LIMIT_PER_MINUTE = 120;
+export const MAX_MCP_BODY_BYTES = 20 * 1024 * 1024;
+export const MAX_BINARY_RESPONSE_BYTES = 32 * 1024 * 1024;
+export const MAX_IMAGE_INPUT_BYTES = 8 * 1024 * 1024;
+export const MAX_IMAGE_PROMPT_CHARS = 8_000;
+export const MAX_IMAGE_SAMPLES = 4;
+export const MAX_REFERENCE_IMAGES = 4;
+export const MAX_CHARACTER_PROMPTS = 6;
+export const MAX_VOICE_TEXT_CHARS = 1_000;
+export const MAX_NATIVE_TEXT_CHARS = 100_000;
+export const MCP_CUSTOM_DOMAIN = "nai.hoshinoaya.com";
 
-const ALLOWED_NAI_HOSTS = new Set(["text.novelai.net", "api.novelai.net"]);
+export type NaiHostKind = "text" | "image" | "api";
+
+const TEXT_HOSTS = new Set(["text.novelai.net", "api.novelai.net"]);
+const IMAGE_HOSTS = new Set(["image.novelai.net"]);
+const API_HOSTS = new Set(["api.novelai.net"]);
+
+const TEXT_AI_PATHS = new Set(["/ai/generate", "/ai/generate-stream"]);
+const IMAGE_PATHS = new Set([
+  "/ai/generate-image",
+  "/ai/augment-image",
+  "/ai/encode-vibe",
+  "/ai/generate-image/suggest-tags",
+]);
+const API_PATHS = new Set([
+  "/user/subscription",
+  "/user/information",
+  "/ai/generate-voice",
+  "/ai/upscale",
+  "/ai/annotate-image",
+]);
 
 /** Truncate attacker-controlled identifiers before putting them in error strings. */
 export function safeIdent(value: unknown, max = 128): string {
@@ -58,6 +87,35 @@ export function sanitizeRetryAfter(value: string | null): string | null {
   return t;
 }
 
-export function isAllowedNaiHost(hostname: string): boolean {
-  return ALLOWED_NAI_HOSTS.has(hostname.toLowerCase());
+/** Host allowlist. Default kind is text (existing OpenAI proxy). */
+export function isAllowedNaiHost(
+  hostname: string,
+  kind: NaiHostKind = "text",
+): boolean {
+  const host = hostname.toLowerCase();
+  if (kind === "image") return IMAGE_HOSTS.has(host);
+  if (kind === "api") return API_HOSTS.has(host);
+  return TEXT_HOSTS.has(host);
+}
+
+/**
+ * Path allowlist per upstream host. Query strings are ignored.
+ * Rejects protocol-relative URLs, traversal, and header-smuggling bytes.
+ */
+export function isAllowedNaiPath(kind: NaiHostKind, path: string): boolean {
+  if (typeof path !== "string" || path.length < 2 || path.length > 1024) {
+    return false;
+  }
+  if (!path.startsWith("/") || path.startsWith("//")) return false;
+  if (path.includes("\\") || path.includes("..") || path.includes("@")) {
+    return false;
+  }
+  if (/[\u0000-\u001f\u007f]/.test(path)) return false;
+  const pathname = path.split("?")[0]!;
+  if (!pathname.startsWith("/") || pathname.startsWith("//")) return false;
+  if (kind === "text") {
+    return pathname.startsWith("/oa/v1/") || TEXT_AI_PATHS.has(pathname);
+  }
+  if (kind === "image") return IMAGE_PATHS.has(pathname);
+  return API_PATHS.has(pathname);
 }

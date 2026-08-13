@@ -1,5 +1,5 @@
 import { openaiError } from "./errors";
-import { isAllowedNaiHost } from "./limits";
+import { isAllowedNaiHost, type NaiHostKind } from "./limits";
 
 /**
  * Bindings from `wrangler types` (`Cloudflare.Env`), plus the local-only
@@ -7,13 +7,26 @@ import { isAllowedNaiHost } from "./limits";
  *
  * `API_RATE_LIMIT` is optional at the type level because the Worker fail-opens
  * when the binding is missing (tests and platform outages).
+ *
+ * `NAI_ACCESS_TOKEN` is an optional Worker secret used as an MCP fallback when
+ * the request has no Authorization header.
  */
 export type Env = Omit<Cloudflare.Env, "API_RATE_LIMIT"> & {
   NAI_ALLOW_UNSAFE_BASE_URL?: string;
+  NAI_ACCESS_TOKEN?: string;
   API_RATE_LIMIT?: Cloudflare.Env["API_RATE_LIMIT"];
 };
 
-export type NaiUrlEnv = Pick<Env, "NAI_BASE_URL" | "NAI_ALLOW_UNSAFE_BASE_URL">;
+export type NaiUrlEnv = Pick<Env, "NAI_BASE_URL" | "NAI_ALLOW_UNSAFE_BASE_URL"> & {
+  NAI_IMAGE_BASE_URL?: string;
+  NAI_API_BASE_URL?: string;
+};
+
+const DEFAULT_ORIGINS: Record<NaiHostKind, string> = {
+  text: "https://text.novelai.net",
+  image: "https://image.novelai.net",
+  api: "https://api.novelai.net",
+};
 
 function parseBase(raw: string): URL {
   try {
@@ -26,12 +39,18 @@ function parseBase(raw: string): URL {
   }
 }
 
-/**
- * Resolve the upstream origin. Production only allows https://text.novelai.net
- * and https://api.novelai.net so a bad binding cannot exfiltrate Bearer tokens.
- */
-export function resolveNaiBaseUrl(env: NaiUrlEnv): string {
-  const url = parseBase(env.NAI_BASE_URL);
+function rawOrigin(env: NaiUrlEnv, kind: NaiHostKind): string {
+  if (kind === "image") {
+    return env.NAI_IMAGE_BASE_URL?.trim() || DEFAULT_ORIGINS.image;
+  }
+  if (kind === "api") {
+    return env.NAI_API_BASE_URL?.trim() || DEFAULT_ORIGINS.api;
+  }
+  return env.NAI_BASE_URL;
+}
+
+function resolveOrigin(raw: string, env: NaiUrlEnv, kind: NaiHostKind): string {
+  const url = parseBase(raw);
   if (url.username || url.password) {
     throw openaiError(500, "Server misconfigured", {
       type: "api_error",
@@ -50,12 +69,6 @@ export function resolveNaiBaseUrl(env: NaiUrlEnv): string {
     env.NAI_ALLOW_UNSAFE_BASE_URL === "true";
 
   if (unsafe) {
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      throw openaiError(500, "Server misconfigured", {
-        type: "api_error",
-        code: "internal_error",
-      });
-    }
     return url.origin;
   }
 
@@ -71,11 +84,30 @@ export function resolveNaiBaseUrl(env: NaiUrlEnv): string {
       code: "internal_error",
     });
   }
-  if (!isAllowedNaiHost(url.hostname)) {
+  if (!isAllowedNaiHost(url.hostname, kind)) {
     throw openaiError(500, "Server misconfigured", {
       type: "api_error",
       code: "internal_error",
     });
   }
   return url.origin;
+}
+
+/**
+ * Resolve an upstream origin. Production only allows the NovelAI hosts for
+ * the requested kind so a bad binding cannot exfiltrate Bearer tokens.
+ */
+export function resolveNaiOrigin(
+  env: NaiUrlEnv,
+  kind: NaiHostKind = "text",
+): string {
+  return resolveOrigin(rawOrigin(env, kind), env, kind);
+}
+
+/**
+ * Resolve the text API origin (existing OpenAI proxy). Production allows
+ * https://text.novelai.net and https://api.novelai.net.
+ */
+export function resolveNaiBaseUrl(env: NaiUrlEnv): string {
+  return resolveNaiOrigin(env, "text");
 }

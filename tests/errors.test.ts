@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   HttpError,
   mapNaiError,
   mapStatusToCode,
   mapStatusToType,
   openaiError,
+  unhandledToResponse,
 } from "../src/errors";
 
 describe("mapNaiError", () => {
@@ -103,5 +104,34 @@ describe("status helpers", () => {
       param: "messages",
     });
     expect(err.toJSON().error.param).toBe("messages");
+  });
+});
+
+describe("unhandledToResponse", () => {
+  it("passes HttpError through without leaking a different status", async () => {
+    const res = unhandledToResponse(openaiError(413, "Request body too large"), "/mcp");
+    expect(res.status).toBe(413);
+  });
+
+  it("maps unexpected throws to a generic 500 and logs JSON", async () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((msg: unknown) => {
+      if (typeof msg === "string") lines.push(msg);
+    });
+    try {
+      const res = unhandledToResponse(new Error("secret stack"), "/mcp");
+      expect(res.status).toBe(500);
+      const json = (await res.json()) as { error?: { message?: string; code?: string } };
+      expect(json.error?.message).toBe("Internal Server Error");
+      expect(json.error?.code).toBe("internal_error");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toEqual({
+        message: "unhandled error",
+        error: "secret stack",
+        path: "/mcp",
+      });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
