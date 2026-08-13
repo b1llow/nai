@@ -1,21 +1,24 @@
+import { Buffer } from "node:buffer";
+
 const PNG_MAGIC = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const ZIP_MAGIC = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
 export function bytesToBase64(bytes: Uint8Array): string {
-  const chunk = 0x8000;
-  const parts: string[] = [];
-  for (let i = 0; i < bytes.length; i += chunk) {
-    const sub = bytes.subarray(i, i + chunk);
-    parts.push(String.fromCharCode(...sub));
-  }
-  return btoa(parts.join(""));
+  return Buffer.from(
+    bytes.buffer,
+    bytes.byteOffset,
+    bytes.byteLength,
+  ).toString("base64");
 }
 
 export function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+  // Buffer.from(..., "base64") is lenient; reject invalid alphabets so
+  // decodeUserImage still treats junk as a client error.
+  if (b64.length % 4 === 1 || !BASE64_RE.test(b64)) {
+    throw new TypeError("invalid base64");
+  }
+  return new Uint8Array(Buffer.from(b64, "base64"));
 }
 
 export function stripDataUrl(raw: string): string {

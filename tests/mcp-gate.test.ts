@@ -1,19 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { MAX_MCP_BODY_BYTES } from "../src/limits";
 import { handleMcp } from "../src/mcp/server";
-import type { Env } from "../src/env";
+import { testEnv, testExecutionContext } from "./helpers";
 
-const env = {
-  NAI_BASE_URL: "https://text.novelai.net",
-  NAI_IMAGE_BASE_URL: "https://image.novelai.net",
-  NAI_API_BASE_URL: "https://api.novelai.net",
-} as Env;
-
-const ctx = {
-  waitUntil() {},
-  passThroughOnException() {},
-  props: {},
-} as unknown as ExecutionContext;
+const env = testEnv();
+const ctx = testExecutionContext();
 
 describe("MCP HTTP gates", () => {
   it("rejects oversized Content-Length before the MCP handler", async () => {
@@ -58,10 +49,9 @@ describe("MCP HTTP gates", () => {
         },
         body: "{}",
       }),
-      {
-        ...env,
+      testEnv({
         API_RATE_LIMIT: { limit: async () => ({ success: false }) },
-      },
+      }),
       ctx,
     );
     expect(res.status).toBe(429);

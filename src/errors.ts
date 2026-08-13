@@ -1,3 +1,4 @@
+import { errorMessage, logError } from "./log";
 import {
   sanitizeErrorCode,
   sanitizeErrorText,
@@ -72,11 +73,16 @@ export function mapStatusToCode(status: number): string | null {
   return null;
 }
 
+/** Headers-like object; avoids requiring a full `Headers` instance in tests. */
+export type HeaderGetter = {
+  get(name: string): string | null;
+};
+
 /** Map NAI utils.JsonError / HTTP status into OpenAI envelope. */
 export function mapNaiError(
   status: number,
   body: unknown,
-  headers?: Headers,
+  headers?: HeaderGetter,
 ): HttpError {
   // Callers sometimes pass a 2xx status when an error payload arrived
   // mislabeled as success; never emit an HTTP 2xx error envelope.
@@ -122,6 +128,25 @@ export function httpErrorToResponse(err: HttpError): Response {
       ...err.headers,
     },
   });
+}
+
+/**
+ * Map unexpected throws to a generic 500. Never leak internal error text
+ * to the client; log a structured JSON line for Workers Observability.
+ */
+export function unhandledToResponse(err: unknown, path: string): Response {
+  if (err instanceof HttpError) return httpErrorToResponse(err);
+  logError({
+    message: "unhandled error",
+    error: errorMessage(err),
+    path,
+  });
+  return httpErrorToResponse(
+    openaiError(500, "Internal Server Error", {
+      type: "api_error",
+      code: "internal_error",
+    }),
+  );
 }
 
 function extractMessage(body: unknown): string | null {

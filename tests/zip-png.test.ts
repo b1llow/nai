@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { zipSync } from "fflate";
-import { base64ToBytes, isPng, pngSize } from "../src/nai/binary";
+import { base64ToBytes, bytesToBase64, isPng, pngSize } from "../src/nai/binary";
 import { extractPngs } from "../src/nai/zip";
 
 const PNG_1X1_B64 =
@@ -18,6 +18,18 @@ describe("png + zip extraction", () => {
     const files = extractPngs(bytes);
     expect(files).toHaveLength(1);
     expect(files[0]?.name).toBe("image_0.png");
+  });
+
+  it("round-trips bytes through base64 including subarray views", () => {
+    const bytes = base64ToBytes(PNG_1X1_B64);
+    expect(bytesToBase64(bytes)).toBe(PNG_1X1_B64);
+    const padded = new Uint8Array(bytes.length + 4);
+    padded.set(bytes, 2);
+    expect(bytesToBase64(padded.subarray(2, 2 + bytes.length))).toBe(PNG_1X1_B64);
+  });
+
+  it("rejects invalid base64 alphabets", () => {
+    expect(() => base64ToBytes("!!!!")).toThrow(/invalid base64/i);
   });
 
   it("unzips NovelAI-style image_0.png archives", () => {

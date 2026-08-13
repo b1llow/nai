@@ -22,7 +22,7 @@ describe("mapNaiError sanitization", () => {
 
     const injected = mapNaiError(429, { message: "slow down" }, {
       get: () => "12\r\nSet-Cookie: a=b",
-    } as unknown as Headers);
+    });
     expect(injected.headers["Retry-After"]).toBeUndefined();
   });
 

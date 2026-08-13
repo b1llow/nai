@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import type { AppEnv } from "./types";
 import { HttpError, openaiError } from "./errors";
+import { errorMessage, logError } from "./log";
 import { handleChatCompletions } from "./chat";
 import { handleResponses } from "./responses";
 import { listModels, getModel } from "./models";
@@ -125,9 +126,9 @@ app.onError((err, c) => {
     }
     return c.json(err.toJSON(), err.status as 400);
   }
-  console.error({
+  logError({
     message: "unhandled error",
-    error: err instanceof Error ? err.message : "non-error thrown",
+    error: errorMessage(err),
     path: c.req.path,
   });
   return c.json(

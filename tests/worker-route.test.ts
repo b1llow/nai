@@ -1,18 +1,9 @@
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
-import type { Env } from "../src/env";
+import { testEnv, testExecutionContext } from "./helpers";
 
-const env = {
-  NAI_BASE_URL: "https://text.novelai.net",
-  NAI_IMAGE_BASE_URL: "https://image.novelai.net",
-  NAI_API_BASE_URL: "https://api.novelai.net",
-} as Env;
-
-const ctx = {
-  waitUntil() {},
-  passThroughOnException() {},
-  props: {},
-} as unknown as ExecutionContext;
+const env = testEnv();
+const ctx = testExecutionContext();
 
 describe("worker fetch routing", () => {
   it("serves Hono health on /health", async () => {

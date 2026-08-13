@@ -1,4 +1,5 @@
 import { HttpError } from "../errors";
+import { errorMessage, logError } from "../log";
 
 export type McpText = { type: "text"; text: string };
 export type McpImage = { type: "image"; data: string; mimeType: string };
@@ -32,6 +33,13 @@ export function mcpNeedAuth(): McpToolResult {
 
 export function mcpError(err: unknown): McpToolResult {
   if (err instanceof HttpError) {
+    if (err.status >= 500) {
+      logError({
+        message: "mcp tool upstream error",
+        error: err.message,
+        status: err.status,
+      });
+    }
     return {
       content: [{ type: "text", text: err.message }],
       isError: true,
@@ -43,6 +51,10 @@ export function mcpError(err: unknown): McpToolResult {
       isError: true,
     };
   }
+  logError({
+    message: "unhandled mcp tool error",
+    error: errorMessage(err),
+  });
   return {
     content: [{ type: "text", text: "Internal Server Error" }],
     isError: true,
