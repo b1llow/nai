@@ -150,4 +150,110 @@ describe("MCP image_id flow", () => {
       await server.close();
     }
   });
+
+  it("sends the vibe_id stored information_extracted to generate-image", async () => {
+    let generateBody: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/ai/encode-vibe")) {
+          return new Response(new Uint8Array([9, 8, 7, 6]), {
+            headers: { "content-type": "application/octet-stream" },
+          });
+        }
+        if (url.includes("/ai/generate-image") && !url.includes("suggest")) {
+          generateBody = jsonBody(init);
+          return new Response(pngZip(), {
+            headers: { "content-type": "application/zip" },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+
+    const { client, server } = await connectedClient();
+    try {
+      const encoded = await client.callTool({
+        name: "nai_encode_vibe",
+        arguments: { image: PNG_1X1, information_extracted: 0.42 },
+      });
+      expect(encoded.isError).not.toBe(true);
+      const vibeId = (encoded.structuredContent as { vibe_id: string }).vibe_id;
+      expect(vibeId).toMatch(/^vibe_[a-f0-9]{32}$/);
+
+      const generated = await client.callTool({
+        name: "nai_generate_image",
+        arguments: {
+          prompt: "landscape",
+          seed: 3,
+          reference_images: [{ image: vibeId, strength: 0.7 }],
+        },
+      });
+      expect(generated.isError).not.toBe(true);
+      const parameters = generateBody.parameters as {
+        reference_information_extracted_multiple?: number[];
+      };
+      expect(parameters.reference_information_extracted_multiple).toEqual([0.42]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("errors when vibe_id cannot be stored after encode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/ai/encode-vibe")) {
+          return new Response(new Uint8Array([1, 2, 3, 4]), {
+            headers: { "content-type": "application/octet-stream" },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+
+    const env = testEnv();
+    const origPut = env.OAUTH_KV.put.bind(env.OAUTH_KV);
+    env.OAUTH_KV.put = (async (key, value, opts) => {
+      if (String(key).startsWith("vibe:vibe_")) {
+        throw new Error("kv write failed");
+      }
+      return origPut(key, value, opts);
+    }) as typeof env.OAUTH_KV.put;
+
+    const { client, server } = await connectedClient(env);
+    try {
+      const encoded = await client.callTool({
+        name: "nai_encode_vibe",
+        arguments: { image: PNG_1X1 },
+      });
+      expect(encoded.isError).toBe(true);
+      const text = (encoded.content[0] as { text?: string }).text ?? "";
+      expect(text).toMatch(/vibe_id could not be stored/);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("returns resource-not-found for a missing image_id", async () => {
+    const { client, server } = await connectedClient();
+    try {
+      const missing = "img_" + "11".repeat(16);
+      try {
+        await client.readResource({ uri: `nai://image/${missing}` });
+        throw new Error("expected readResource to fail");
+      } catch (err) {
+        expect(err).toBeInstanceOf(Error);
+        expect((err as Error).message).toMatch(/not found or has expired/);
+        expect((err as { code?: number }).code).not.toBe(-32603);
+      }
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

@@ -10,6 +10,7 @@ import {
   putVibe,
   resolveImageOrVibeRef,
   resolveImageRef,
+  vibeIeKey,
 } from "../src/mcp/artifacts";
 import { base64ToBytes } from "../src/nai/binary";
 import {
@@ -171,7 +172,36 @@ describe("vibe artifacts and cache", () => {
     expect(stored.base64).toBe("dG9rZW4=");
 
     const resolved = await resolveImageOrVibeRef(env, OWNER, id!, "reference_images");
-    expect(resolved).toEqual({ image: "dG9rZW4=", encoded: true });
+    expect(resolved).toEqual({
+      image: "dG9rZW4=",
+      encoded: true,
+      information_extracted: 1,
+    });
+  });
+
+  it("preserves the stored information_extracted on vibe_id resolve", async () => {
+    const env = testEnv();
+    const id = await putVibe(env, OWNER, "dG9rZW4=", {
+      model: "nai-diffusion-4-5-full",
+      information_extracted: 0.42,
+    });
+    const resolved = await resolveImageOrVibeRef(env, OWNER, id!, "reference_images");
+    expect(resolved.information_extracted).toBe(0.42);
+    expect(resolved.encoded).toBe(true);
+  });
+
+  it("keeps nearby information_extracted values in separate cache slots", async () => {
+    expect(vibeIeKey(0.55)).not.toBe(vibeIeKey(0.554));
+    const env = testEnv();
+    const png = base64ToBytes(PNG_1X1);
+    await putCachedVibe(env, OWNER, png, "nai-diffusion-4-5-full", 0.55, "ie-55");
+    await putCachedVibe(env, OWNER, png, "nai-diffusion-4-5-full", 0.554, "ie-554");
+    expect(
+      await getCachedVibe(env, OWNER, png, "nai-diffusion-4-5-full", 0.55),
+    ).toBe("ie-55");
+    expect(
+      await getCachedVibe(env, OWNER, png, "nai-diffusion-4-5-full", 0.554),
+    ).toBe("ie-554");
   });
 
   it("caches encode results per owner+png+model+ie", async () => {

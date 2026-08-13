@@ -1,4 +1,9 @@
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
+import {
+  McpServer,
+  ResourceNotFoundError,
+  ResourceTemplate,
+} from "@modelcontextprotocol/server";
+import { HttpError, openaiError } from "../errors";
 import { z } from "zod";
 import type { Env } from "../env";
 import { sanitizeChatBody, runChatCompletion } from "../chat";
@@ -158,7 +163,7 @@ const tagsOutputSchema = z.object({
 });
 
 const vibeOutputSchema = z.object({
-  vibe_id: z.string().nullable(),
+  vibe_id: z.string(),
   model: z.string(),
   information_extracted: z.number(),
   usage: z.string(),
@@ -346,6 +351,12 @@ export function registerNaiTools(
           model,
           information_extracted,
         });
+        if (!vibe_id) {
+          throw openaiError(
+            400,
+            "vibe_id could not be stored. Retry nai_encode_vibe, or pass the same PNG as reference_images[].image (the encode is cached).",
+          );
+        }
         return mcpJson({
           vibe_id,
           model,
@@ -576,27 +587,26 @@ export function registerNaiTools(
     },
     async (uri, { id }) => {
       if (!auth) {
+        throw new ResourceNotFoundError(uri.href);
+      }
+      try {
+        const owner = await artifactOwner(auth);
+        const img = await getImage(env, owner, String(id), "image_id");
         return {
           contents: [
             {
               uri: uri.href,
-              mimeType: "text/plain",
-              text: "Missing NovelAI Persistent API token.",
+              mimeType: img.mime,
+              blob: img.base64,
             },
           ],
         };
+      } catch (err) {
+        if (err instanceof HttpError && err.status < 500) {
+          throw new ResourceNotFoundError(uri.href, err.message);
+        }
+        throw err;
       }
-      const owner = await artifactOwner(auth);
-      const img = await getImage(env, owner, String(id), "image_id");
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: img.mime,
-            blob: img.base64,
-          },
-        ],
-      };
     },
   );
 
@@ -767,6 +777,8 @@ async function resolveGenerateInput(
             ...ref,
             image: resolved.image,
             encoded: resolved.encoded || ref.encoded,
+            information_extracted:
+              ref.information_extracted ?? resolved.information_extracted,
           };
         }),
       )

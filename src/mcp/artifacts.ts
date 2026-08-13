@@ -92,6 +92,12 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
     .join("");
 }
 
+/** Distinct floats stay distinct so 0.55 and 0.554 never share a cache slot. */
+export function vibeIeKey(value: number): string {
+  if (!Number.isFinite(value)) return "nan";
+  return value.toString();
+}
+
 function vibeCacheKey(
   owner: string,
   hash: string,
@@ -99,8 +105,7 @@ function vibeCacheKey(
   informationExtracted: number,
 ): string {
   const m = model.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
-  const ie = String(Math.round(informationExtracted * 100));
-  return `vibecache:${owner}:${hash}:${m}:${ie}`;
+  return `vibecache:${owner}:${hash}:${m}:${vibeIeKey(informationExtracted)}`;
 }
 
 export async function artifactOwner(auth: string): Promise<string> {
@@ -308,10 +313,18 @@ export async function resolveImageOrVibeRef(
   owner: string,
   raw: string,
   param = "reference_images",
-): Promise<{ image: string; encoded: boolean }> {
+): Promise<{
+  image: string;
+  encoded: boolean;
+  information_extracted?: number;
+}> {
   if (parseVibeId(raw)) {
     const vibe = await getVibe(env, owner, raw, param);
-    return { image: vibe.base64, encoded: true };
+    return {
+      image: vibe.base64,
+      encoded: true,
+      information_extracted: vibe.information_extracted,
+    };
   }
   if (parseImageId(raw)) {
     const stored = await getImage(env, owner, raw, param);
