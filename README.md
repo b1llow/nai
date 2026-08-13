@@ -44,12 +44,13 @@ The header is forwarded upstream unchanged.
 
 ## MCP server
 
-`POST https://nai.hoshinoaya.com/mcp` (Streamable HTTP). Auth is a NovelAI Persistent API token:
+`POST https://nai.hoshinoaya.com/mcp` (Streamable HTTP). Auth is a NovelAI Persistent API token on every request, same as `/v1`:
 
-1. `Authorization: Bearer <token>` on the MCP HTTP request (same as `/v1`)
-2. Or Worker secret `NAI_ACCESS_TOKEN` when the client cannot set headers
+```http
+Authorization: Bearer <token>
+```
 
-Create a persistent token in the NovelAI account settings. Do not send email/password to this worker.
+Create a persistent token in the NovelAI account settings. Do not send email/password to this worker. Do not put a NovelAI token in a Worker secret: this URL is public, and a shared fallback token would let anyone use your account. Clients that cannot set HTTP headers should use `mcp-remote` (below) instead of a server-side token.
 
 Cursor / Claude Desktop via `mcp-remote`:
 
@@ -153,8 +154,6 @@ Override locally with `.dev.vars` (gitignored):
 NAI_BASE_URL=https://text.novelai.net
 NAI_IMAGE_BASE_URL=https://image.novelai.net
 NAI_API_BASE_URL=https://api.novelai.net
-# optional MCP fallback:
-# NAI_ACCESS_TOKEN=your_persistent_token
 ```
 
 ### Dev
@@ -282,13 +281,12 @@ Chat and Responses always request `stream: true` from NovelAI. Non-stream client
 | `NAI_BASE_URL` | yes | NovelAI text API origin. Must be `https://text.novelai.net` or `https://api.novelai.net` (default: `https://text.novelai.net`) |
 | `NAI_IMAGE_BASE_URL` | yes | Image API origin. Must be `https://image.novelai.net` |
 | `NAI_API_BASE_URL` | yes | Account / upscale / TTS origin. Must be `https://api.novelai.net` |
-| `NAI_ACCESS_TOKEN` | no | Optional Worker secret; MCP fallback when the request has no Authorization header (`wrangler secret put NAI_ACCESS_TOKEN`) |
 | `NAI_ALLOW_UNSAFE_BASE_URL` | no | Set to `1` only for local mocks; skips the host allowlist but still requires `http(s)` and rejects URLs with credentials |
 | `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` and `/mcp` |
 
-Authenticated `/v1/*` and `/mcp` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB on `/v1` and 20 MiB on `/mcp` (img2img). Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
+Authenticated `/v1/*` and `/mcp` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB on `/v1` and 20 MiB on `/mcp` (img2img); the MCP cap is enforced on the actual body, not only `Content-Length`. Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
 
-Callers normally supply the NovelAI token per request. An optional Worker secret is only for MCP clients that cannot set headers. Tokens must be printable ASCII Bearer credentials (8–4096 chars).
+Callers must supply the NovelAI token per request (`Authorization: Bearer <token>`) on `/v1/*` and `/mcp`. Tokens must be printable ASCII Bearer credentials (8–4096 chars).
 
 ## License
 

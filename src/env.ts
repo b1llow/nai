@@ -7,13 +7,9 @@ import { isAllowedNaiHost, type NaiHostKind } from "./limits";
  *
  * `API_RATE_LIMIT` is optional at the type level because the Worker fail-opens
  * when the binding is missing (tests and platform outages).
- *
- * `NAI_ACCESS_TOKEN` is an optional Worker secret used as an MCP fallback when
- * the request has no Authorization header.
  */
 export type Env = Omit<Cloudflare.Env, "API_RATE_LIMIT"> & {
   NAI_ALLOW_UNSAFE_BASE_URL?: string;
-  NAI_ACCESS_TOKEN?: string;
   API_RATE_LIMIT?: Cloudflare.Env["API_RATE_LIMIT"];
 };
 

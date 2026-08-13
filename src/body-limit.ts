@@ -1,11 +1,11 @@
 import { openaiError } from "./errors";
-import { readBytesCapped } from "./upstream";
+import { readStreamCapped } from "./upstream";
 
 const SKIP_BODY_LIMIT = new Set(["GET", "HEAD", "OPTIONS"]);
 
 /**
- * Cap an incoming request body. `Content-Length` is a fast-path reject;
- * the body is also counted so chunked uploads cannot skip the limit.
+ * Cap an inbound request by actual body bytes, not just Content-Length.
+ * Missing or understated Content-Length cannot bypass the limit.
  */
 export async function limitRequestBody(
   request: Request,
@@ -25,15 +25,14 @@ export async function limitRequestBody(
 
   if (!request.body) return request;
 
-  const { bytes, truncated } = await readBytesCapped(
-    new Response(request.body),
-    maxBytes,
-  );
+  const { bytes, truncated } = await readStreamCapped(request.body, maxBytes);
   if (truncated) {
     throw openaiError(413, "Request body too large", {
       type: "invalid_request_error",
     });
   }
 
-  return new Request(request, { body: bytes });
+  const headers = new Headers(request.headers);
+  headers.set("content-length", String(bytes.byteLength));
+  return new Request(request, { body: bytes, headers });
 }

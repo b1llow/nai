@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { openaiError } from "../src/errors";
-import { mcpError } from "../src/mcp/result";
+import { mcpError, mcpNeedAuth } from "../src/mcp/result";
+
+describe("mcpNeedAuth", () => {
+  it("tells the client to send a Bearer token and does not mention a Worker secret", () => {
+    const out = mcpNeedAuth();
+    expect(out.isError).toBe(true);
+    const text = (out.content[0] as { text: string }).text;
+    expect(text).toMatch(/Authorization: Bearer/i);
+    expect(text).not.toMatch(/NAI_ACCESS_TOKEN/);
+    expect(text).not.toMatch(/Worker secret/i);
+  });
+});
 
 describe("mcpError", () => {
   it("returns client HttpError text without logging", () => {

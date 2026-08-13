@@ -41,26 +41,26 @@ export async function handleMcp(
   ctx: ExecutionContext,
 ): Promise<Response> {
   try {
-    if (request.method !== "OPTIONS") {
-      await enforceIpRateLimit(env, request);
-      request = await limitRequestBody(request, MAX_MCP_BODY_BYTES);
+    let inbound = request;
+    if (inbound.method !== "OPTIONS") {
+      await enforceIpRateLimit(env, inbound);
+      inbound = await limitRequestBody(inbound, MAX_MCP_BODY_BYTES);
     }
 
     const auth = resolveMcpAuthorization(
-      request.headers.get("Authorization") ?? undefined,
-      env.NAI_ACCESS_TOKEN,
+      inbound.headers.get("Authorization") ?? undefined,
     );
 
     const response = await createMcpHandler(() => createNaiMcpServer(env, auth), {
       route: "/mcp",
-      allowedHostnames: mcpAllowedHostnames(request),
+      allowedHostnames: mcpAllowedHostnames(inbound),
       corsOptions: {
         origin: "*",
         methods: "GET, POST, OPTIONS",
         headers:
           "Authorization, Content-Type, Accept, MCP-Protocol-Version, mcp-session-id",
       },
-    })(request, env, ctx);
+    })(inbound, env, ctx);
 
     const headers = new Headers(response.headers);
     headers.set("Cache-Control", "private, no-store");

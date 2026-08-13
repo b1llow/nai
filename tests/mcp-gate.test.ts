@@ -39,6 +39,34 @@ describe("MCP HTTP gates", () => {
     expect(res.status).toBe(401);
   });
 
+  it("rejects an oversized streamed body without Content-Length", async () => {
+    const chunk = new Uint8Array(64 * 1024).fill(120);
+    let sent = 0;
+    const total = MAX_MCP_BODY_BYTES + 1;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= total) {
+          controller.close();
+          return;
+        }
+        const n = Math.min(chunk.byteLength, total - sent);
+        controller.enqueue(n === chunk.byteLength ? chunk : chunk.subarray(0, n));
+        sent += n;
+      },
+    });
+    const res = await handleMcp(
+      new Request("https://nai.hoshinoaya.com/mcp", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        duplex: "half",
+      } as RequestInit),
+      env,
+      ctx,
+    );
+    expect(res.status).toBe(413);
+  });
+
   it("returns 429 when the limiter denies", async () => {
     const res = await handleMcp(
       new Request("https://nai.hoshinoaya.com/mcp", {
