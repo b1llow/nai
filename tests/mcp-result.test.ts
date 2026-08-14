@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mcpJson, withImages } from "../src/mcp/result";
+import { mcpJson, mcpNeedAuth, runTool, withImages, withWidgetBridge } from "../src/mcp/result";
 import { base64ToBytes } from "../src/nai/binary";
 import { testEnv } from "./helpers";
 
@@ -70,6 +70,37 @@ describe("withImages", () => {
       uri: structured.images[0]?.resource_uri,
       name: "image_0.png",
       mimeType: "image/png",
+    });
+    expect(out._meta?.mcp_tool_result).toEqual({
+      content: out.content,
+      structuredContent: out.structuredContent,
+    });
+    expect(out._meta?.call_tool_result).toEqual(out._meta?.mcp_tool_result);
+  });
+
+  it("copies error envelopes onto widget _meta for ChatGPT", () => {
+    const out = withWidgetBridge(mcpNeedAuth());
+    expect(out.isError).toBe(true);
+    expect(out._meta?.mcp_tool_result).toEqual({
+      content: out.content,
+      isError: true,
+    });
+    expect(out._meta?.call_tool_result).toEqual(out._meta?.mcp_tool_result);
+  });
+
+  it("attaches widget _meta only when runTool is opted in", async () => {
+    const plain = await runTool("Bearer token-xx", async () => mcpJson({ text: "ok" }));
+    expect(plain._meta?.mcp_tool_result).toBeUndefined();
+    expect(plain.structuredContent).toEqual({ text: "ok" });
+
+    const widget = await runTool(
+      "Bearer token-xx",
+      async () => mcpJson({ text: "ok" }),
+      { widget: true },
+    );
+    expect(widget._meta?.mcp_tool_result).toEqual({
+      content: widget.content,
+      structuredContent: { text: "ok" },
     });
   });
 
