@@ -25,7 +25,7 @@ In short: keep using the NovelAI models you pay for, without rewriting every cli
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/` | Service info |
-| `GET` | `/health` | Liveness. JSON `{ ok, revision }` — `revision` is the git SHA baked in at deploy (`null` in local/dev) |
+| `GET` | `/health` | Liveness. JSON `{ ok, revision }` — `revision` is the git SHA stamped before the Worker is bundled (`null` only if install/deploy could not resolve a SHA) |
 | `POST`/`GET` | `/mcp` | Remote MCP (Streamable HTTP). OAuth or NovelAI Bearer |
 | `GET`/`POST` | `/authorize` | MCP OAuth consent (paste Persistent API token) |
 | `POST` | `/oauth/token` | OAuth token + refresh |
@@ -210,7 +210,7 @@ The dashboard Worker is already named `nai`, matching `wrangler.jsonc`. Connect 
 
 1. Open [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → **nai** → **Settings** → **Builds** → **Connect**
 2. Authorize the [Cloudflare Workers & Pages GitHub App](https://github.com/apps/cloudflare-workers-and-pages) if prompted, and grant access to `b1llow/nai`
-3. Production branch: `main`. Leave the build command empty. Deploy command: `npm run deploy` (uses the Wrangler version in `package.json`; `scripts/deploy.mjs` bakes the git SHA via `wrangler --define`, without replacing `vars`)
+3. Production branch: `main`. Leave the build command empty. The default deploy command `npx wrangler deploy` is enough: Workers Builds runs `npm clean-install` first, and `postinstall` stamps `src/baked-revision.ts` from `WORKERS_CI_COMMIT_SHA` (or `git rev-parse HEAD`) so the bundle contains that SHA. Do not use `wrangler deploy --var`; CLI `--var` replaces the entire `vars` map and would drop `NAI_BASE_URL`.
 4. Save, then either retry a build of current `main` or push a commit. Cloudflare will deploy from that commit. Confirm the live Worker with `GET https://nai.hoshinoaya.com/health` — `revision` should match that commit SHA.
 
 Custom domain: `nai.hoshinoaya.com` (`wrangler.jsonc` `routes`). After a successful production build, `/v1/*` responses should include `Cache-Control: private, no-store`.

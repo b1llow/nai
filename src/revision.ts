@@ -1,7 +1,6 @@
-const GIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
+import { BAKED_REVISION } from "./baked-revision";
 
-/** Replaced at deploy by `wrangler --define`. Undeclared in tests / `wrangler dev`. */
-declare const __NAI_REVISION__: string | undefined;
+const GIT_SHA_RE = /^[0-9a-f]{7,40}$/i;
 
 export function parseRevision(raw: string | undefined | null): string | null {
   const value = raw?.trim() ?? "";
@@ -9,8 +8,7 @@ export function parseRevision(raw: string | undefined | null): string | null {
 }
 
 export function workerRevision(): string | null {
-  const defined = typeof __NAI_REVISION__ === "string" ? __NAI_REVISION__ : "";
-  return parseRevision(defined);
+  return parseRevision(BAKED_REVISION);
 }
 
 export function healthPayload(): { ok: true; revision: string | null } {

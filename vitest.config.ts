@@ -9,6 +9,7 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    fileParallelism: false,
     setupFiles: [resolve(root, "tests/setup.ts")],
     server: {
       deps: {
