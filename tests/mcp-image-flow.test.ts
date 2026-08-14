@@ -326,6 +326,55 @@ describe("MCP image_id flow", () => {
     }
   });
 
+  it("generate still mounts the preview when image_id cannot be stored", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/ai/generate-image") && !url.includes("suggest")) {
+          return new Response(pngZip(), {
+            headers: { "content-type": "application/zip" },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+
+    const env = testEnv();
+    const origPut = env.OAUTH_KV.put.bind(env.OAUTH_KV);
+    env.OAUTH_KV.put = (async (key, value, opts) => {
+      if (String(key).startsWith("img:")) {
+        throw new Error("kv write failed");
+      }
+      return origPut(key, value, opts);
+    }) as typeof env.OAUTH_KV.put;
+
+    const { client, server } = await connectedClient(env);
+    try {
+      const generated = await client.callTool({
+        name: "nai_generate_image",
+        arguments: { prompt: "1girl", seed: 1 },
+      });
+      expect(generated.isError).not.toBe(true);
+      expect(generated.structuredContent).toMatchObject({ image_id: null });
+      expect(generated._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        mcp_tool_result: {
+          structuredContent: { image_id: null },
+        },
+      });
+      expect(generated.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "image", mimeType: "image/png" }),
+        ]),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("render preview requires an image_id and still binds the widget on errors", async () => {
     const { client, server } = await connectedClient();
     try {

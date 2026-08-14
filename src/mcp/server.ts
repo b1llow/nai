@@ -15,7 +15,7 @@ import { IMAGE_WIDGET_RENDER_TOOL } from "./image-widget";
 import { registerNaiTools } from "./tools";
 
 export const MCP_SERVER_INSTRUCTIONS =
-  `After nai_generate_image, nai_upscale, or nai_director returns an image_id, call ${IMAGE_WIDGET_RENDER_TOOL} with that image_id (or image_ids) so ChatGPT mounts the image preview UI. Do not open ui:// URIs. nai_get_image only reloads bytes.`;
+  `After nai_generate_image, nai_upscale, or nai_director returns an image_id, call ${IMAGE_WIDGET_RENDER_TOOL} with that image_id (or image_ids) so ChatGPT mounts the image preview UI. If image_id is null, that result already binds the preview — do not call ${IMAGE_WIDGET_RENDER_TOOL}. Do not open ui:// URIs. nai_get_image only reloads bytes.`;
 
 export function createNaiMcpServer(env: Env, auth: string | null): McpServer {
   const server = new McpServer(

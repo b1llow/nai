@@ -178,7 +178,7 @@ const renderImageOutputSchema = z.object({
 });
 
 const RENDER_AFTER =
-  "After success, call nai_render_image_preview with the image_id (or image_ids) so ChatGPT can mount the preview UI. Do not open ui:// URIs.";
+  "After success, call nai_render_image_preview with the image_id (or image_ids) so ChatGPT can mount the preview UI. If image_id is null, this result already binds the preview — do not call nai_render_image_preview. Do not open ui:// URIs.";
 
 export function collectPreviewImageIds(args: {
   image_id?: string;

@@ -4,6 +4,7 @@ import { errorMessage, logError } from "../log";
 import { bytesToBase64, pngSize } from "../nai/binary";
 import { imageResourceUri } from "../nai/image-input";
 import { putImage } from "./artifacts";
+import { IMAGE_WIDGET_URI } from "./image-widget";
 
 export type McpText = { type: "text"; text: string };
 export type McpImage = {
@@ -190,7 +191,14 @@ export async function withImages(
     type: "text",
     text: JSON.stringify(structuredContent, null, 2),
   });
-  return { content, structuredContent };
+  const result: McpToolResult = { content, structuredContent };
+  // Data tools normally leave widget binding to nai_render_image_preview.
+  // When persist fails there is no image_id to render, but ImageContent is
+  // already on this result — bind the template so ChatGPT can still mount.
+  if (stored.some((img) => !img.image_id)) {
+    return withWidgetBridge(result, IMAGE_WIDGET_URI);
+  }
+  return result;
 }
 
 export async function runTool(
