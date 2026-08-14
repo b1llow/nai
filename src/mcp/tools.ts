@@ -25,6 +25,7 @@ import {
   RESOLUTION_PRESETS,
   SAMPLERS,
   UC_PRESETS,
+  inpaintingModel,
   resolutionPresetDescribe,
 } from "../nai/catalog";
 import { encodeVibe, generateImage, suggestTags } from "../nai/image";
@@ -40,6 +41,7 @@ import {
   putVibe,
   resolveImageOrVibeRef,
   resolveImageRef,
+  vibeIeKey,
 } from "./artifacts";
 import { mcpJson, mcpText, runTool, withImages } from "./result";
 
@@ -764,6 +766,7 @@ async function resolveGenerateInput(
   const mask = args.mask
     ? (await resolveImageRef(env, owner, args.mask, "mask")).base64
     : undefined;
+  const generateModel = effectiveGenerateModel(args);
   const reference_images = args.reference_images
     ? await Promise.all(
         args.reference_images.map(async (ref) => {
@@ -773,12 +776,31 @@ async function resolveGenerateInput(
             ref.image,
             "reference_images",
           );
+          if (resolved.model && resolved.model !== generateModel) {
+            throw openaiError(
+              400,
+              `vibe_id was encoded for ${resolved.model}, but this request uses ${generateModel}. Re-encode with nai_encode_vibe model=${generateModel}.`,
+              { type: "invalid_request_error", param: "reference_images" },
+            );
+          }
+          if (
+            resolved.information_extracted !== undefined &&
+            ref.information_extracted !== undefined &&
+            vibeIeKey(ref.information_extracted) !==
+              vibeIeKey(resolved.information_extracted)
+          ) {
+            throw openaiError(
+              400,
+              `reference_images information_extracted does not match vibe_id (stored ${resolved.information_extracted}). Omit information_extracted or re-encode with nai_encode_vibe.`,
+              { type: "invalid_request_error", param: "reference_images" },
+            );
+          }
           return {
             ...ref,
             image: resolved.image,
             encoded: resolved.encoded || ref.encoded,
             information_extracted:
-              ref.information_extracted ?? resolved.information_extracted,
+              resolved.information_extracted ?? ref.information_extracted,
           };
         }),
       )
@@ -793,4 +815,9 @@ async function resolveGenerateInput(
       )
     : undefined;
   return { ...args, image, mask, reference_images, director_references };
+}
+
+function effectiveGenerateModel(args: GenerateImageInput): string {
+  const model = (args.model ?? DEFAULT_IMAGE_MODEL).trim();
+  return args.action === "infill" ? inpaintingModel(model) : model;
 }

@@ -176,6 +176,7 @@ describe("vibe artifacts and cache", () => {
       image: "dG9rZW4=",
       encoded: true,
       information_extracted: 1,
+      model: "nai-diffusion-4-5-full",
     });
   });
 
@@ -220,5 +221,15 @@ describe("vibe artifacts and cache", () => {
     expect(
       await getCachedVibe(env, OWNER, png, "nai-diffusion-4-5-full", 0.5),
     ).toBeNull();
+  });
+
+  it("treats vibe cache read failures as misses", async () => {
+    const env = testEnv();
+    env.OAUTH_KV.getWithMetadata = (async () => {
+      throw new Error("kv unavailable");
+    }) as typeof env.OAUTH_KV.getWithMetadata;
+    await expect(
+      getCachedVibe(env, OWNER, base64ToBytes(PNG_1X1), "nai-diffusion-4-5-full", 1),
+    ).resolves.toBeNull();
   });
 });

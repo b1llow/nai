@@ -72,4 +72,15 @@ describe("withImages", () => {
       mimeType: "image/png",
     });
   });
+
+  it("does not advertise a base64 fallback when the image cannot be stored", async () => {
+    const env = testEnv();
+    const out = await withImages({ env, owner: "nai-testowner" }, { seed: 1 }, [
+      { name: "image_0.png", bytes: new Uint8Array(0), base64: "" },
+    ]);
+    const images = (out.structuredContent as { images: Array<{ skipped?: string }> })
+      .images;
+    expect(images[0]?.skipped).toMatch(/cannot be passed to later image tools/);
+    expect(images[0]?.skipped).not.toMatch(/pass PNG base64/);
+  });
 });

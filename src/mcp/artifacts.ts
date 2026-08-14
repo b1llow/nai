@@ -245,11 +245,15 @@ export async function getCachedVibe(
   model: string,
   informationExtracted: number,
 ): Promise<string | null> {
-  const hash = await sha256Hex(pngBytes);
-  const key = vibeCacheKey(owner, hash, model, informationExtracted);
-  const row = await env.OAUTH_KV.getWithMetadata<VibeArtifactMeta>(key);
-  if (!row.value || !row.metadata || row.metadata.owner !== owner) return null;
-  return row.value;
+  try {
+    const hash = await sha256Hex(pngBytes);
+    const key = vibeCacheKey(owner, hash, model, informationExtracted);
+    const row = await env.OAUTH_KV.getWithMetadata<VibeArtifactMeta>(key);
+    if (!row.value || !row.metadata || row.metadata.owner !== owner) return null;
+    return row.value;
+  } catch {
+    return null;
+  }
 }
 
 export async function putCachedVibe(
@@ -317,6 +321,7 @@ export async function resolveImageOrVibeRef(
   image: string;
   encoded: boolean;
   information_extracted?: number;
+  model?: string;
 }> {
   if (parseVibeId(raw)) {
     const vibe = await getVibe(env, owner, raw, param);
@@ -324,6 +329,7 @@ export async function resolveImageOrVibeRef(
       image: vibe.base64,
       encoded: true,
       information_extracted: vibe.information_extracted,
+      model: vibe.model || undefined,
     };
   }
   if (parseImageId(raw)) {

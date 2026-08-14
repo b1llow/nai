@@ -195,6 +195,33 @@ describe("MCP image_id flow", () => {
         reference_information_extracted_multiple?: number[];
       };
       expect(parameters.reference_information_extracted_multiple).toEqual([0.42]);
+
+      const conflict = await client.callTool({
+        name: "nai_generate_image",
+        arguments: {
+          prompt: "landscape",
+          seed: 4,
+          reference_images: [
+            { image: vibeId, strength: 0.7, information_extracted: 0.9 },
+          ],
+        },
+      });
+      expect(conflict.isError).toBe(true);
+      const conflictText = (conflict.content[0] as { text?: string }).text ?? "";
+      expect(conflictText).toMatch(/does not match vibe_id/);
+
+      const wrongModel = await client.callTool({
+        name: "nai_generate_image",
+        arguments: {
+          prompt: "landscape",
+          seed: 5,
+          model: "nai-diffusion-4-full",
+          reference_images: [{ image: vibeId, strength: 0.7 }],
+        },
+      });
+      expect(wrongModel.isError).toBe(true);
+      const modelText = (wrongModel.content[0] as { text?: string }).text ?? "";
+      expect(modelText).toMatch(/encoded for nai-diffusion-4-5-full/);
     } finally {
       await client.close();
       await server.close();

@@ -138,7 +138,7 @@ export async function withImages(
       meta.resource_uri = imageResourceUri(imageId);
     } else {
       meta.skipped =
-        "too large to store as image_id; pass PNG base64 for further edits";
+        "too large to store as image_id; this output cannot be passed to later image tools";
     }
     stored.push(meta);
 
