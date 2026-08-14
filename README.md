@@ -25,7 +25,7 @@ In short: keep using the NovelAI models you pay for, without rewriting every cli
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/` | Service info |
-| `GET` | `/health` | Liveness |
+| `GET` | `/health` | Liveness. JSON `{ ok, revision }` — `revision` is the git SHA baked in at deploy (`null` in local/dev) |
 | `POST`/`GET` | `/mcp` | Remote MCP (Streamable HTTP). OAuth or NovelAI Bearer |
 | `GET`/`POST` | `/authorize` | MCP OAuth consent (paste Persistent API token) |
 | `POST` | `/oauth/token` | OAuth token + refresh |
@@ -210,8 +210,8 @@ The dashboard Worker is already named `nai`, matching `wrangler.jsonc`. Connect 
 
 1. Open [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → **nai** → **Settings** → **Builds** → **Connect**
 2. Authorize the [Cloudflare Workers & Pages GitHub App](https://github.com/apps/cloudflare-workers-and-pages) if prompted, and grant access to `b1llow/nai`
-3. Production branch: `main`. Leave the build command empty. Deploy command: `npm run deploy` (uses the Wrangler version in `package.json`)
-4. Save, then either retry a build of current `main` or push a commit. Cloudflare will `wrangler deploy` from that commit.
+3. Production branch: `main`. Leave the build command empty. Deploy command: `npm run deploy` (uses the Wrangler version in `package.json`; `scripts/deploy.mjs` bakes the git SHA via `wrangler --define`, without replacing `vars`)
+4. Save, then either retry a build of current `main` or push a commit. Cloudflare will deploy from that commit. Confirm the live Worker with `GET https://nai.hoshinoaya.com/health` — `revision` should match that commit SHA.
 
 Custom domain: `nai.hoshinoaya.com` (`wrangler.jsonc` `routes`). After a successful production build, `/v1/*` responses should include `Cache-Control: private, no-store`.
 

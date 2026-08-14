@@ -13,7 +13,8 @@ describe("worker fetch routing", () => {
       ctx,
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(await res.json()).toEqual({ ok: true, revision: null });
   });
 
   it("lists /mcp on the root info document", async () => {
