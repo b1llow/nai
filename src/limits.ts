@@ -87,9 +87,22 @@ function isLoopbackHostname(hostname: string): boolean {
 }
 
 /**
+ * wrangler/miniflare omit CF-Connecting-IP or set it to loopback.
+ * Production always sets the real client IP and clients cannot spoof it.
+ */
+function isLocalWranglerClient(request: Request): boolean {
+  const ip =
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip");
+  return !ip || isLoopbackHostname(ip);
+}
+
+/**
  * Public image URL origin. Unknown hosts stay pinned to {@link MCP_ISSUER}.
  * Prefers a loopback `Host` header so `wrangler dev` (which may rewrite
  * `request.url` to the custom domain) still emits fetchable local URLs.
+ * `http://` + the custom domain rewrites to {@link LOCAL_DEV_ORIGIN} only
+ * for loopback clients — production HTTP keeps {@link MCP_ISSUER}.
  */
 export function mcpOriginFromRequest(request: Request): string {
   const candidates: string[] = [];
@@ -114,9 +127,8 @@ export function mcpOriginFromRequest(request: Request): string {
       const url = new URL(origin);
       if (!isAllowedMcpHostname(url.hostname)) continue;
       if (isLoopbackHostname(url.hostname)) return url.origin;
-      // wrangler dev serves the custom domain over http and overwrites Host.
       if (url.protocol === "http:" && url.hostname === MCP_CUSTOM_DOMAIN) {
-        return LOCAL_DEV_ORIGIN;
+        return isLocalWranglerClient(request) ? LOCAL_DEV_ORIGIN : MCP_ISSUER;
       }
       fallback ??= url.origin;
     } catch {

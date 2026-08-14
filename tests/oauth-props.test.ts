@@ -152,6 +152,11 @@ describe("mcpOriginFromRequest", () => {
       mcpOriginFromRequest(new Request("http://127.0.0.1:8787/mcp")),
     ).toBe("http://127.0.0.1:8787");
     expect(
+      mcpOriginFromRequest(
+        new Request("https://nai.example.workers.dev/mcp"),
+      ),
+    ).toBe("https://nai.example.workers.dev");
+    expect(
       mcpOriginFromRequest(new Request("https://evil.example/mcp")),
     ).toBe(MCP_ISSUER);
   });
@@ -167,6 +172,23 @@ describe("mcpOriginFromRequest", () => {
         }),
       ),
     ).toBe(LOCAL_DEV_ORIGIN);
+    expect(
+      mcpOriginFromRequest(
+        new Request("http://nai.hoshinoaya.com/mcp", {
+          headers: { "cf-connecting-ip": "127.0.0.1" },
+        }),
+      ),
+    ).toBe(LOCAL_DEV_ORIGIN);
+  });
+
+  it("does not treat production HTTP on the custom domain as localhost", () => {
+    expect(
+      mcpOriginFromRequest(
+        new Request("http://nai.hoshinoaya.com/mcp", {
+          headers: { "cf-connecting-ip": "203.0.113.9" },
+        }),
+      ),
+    ).toBe(MCP_ISSUER);
   });
 });
 

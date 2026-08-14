@@ -190,6 +190,52 @@ describe("image preview widget", () => {
     expect(gallery.nodes[0]?.src).toBe(url);
   });
 
+  it("rejects off-origin and non-capability image URLs", () => {
+    const { hostMessage, gallery, status } = mountWidget();
+    const id = "img_" + "ab".repeat(16);
+    hostMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: {
+        structuredContent: {
+          image_url: "https://evil.example/i/" + id + ".webp",
+          images: [
+            { url: "https://evil.example/i/" + id + ".webp" },
+            { url: "javascript:alert(1)" },
+            { url: "https://nai.hoshinoaya.com/authorize" },
+            { url: "https://user:pass@nai.hoshinoaya.com/i/" + id + ".webp" },
+          ],
+        },
+        content: [],
+      },
+    });
+    expect(gallery.nodes).toHaveLength(0);
+    expect(status.textContent).toMatch(/did not expose/);
+  });
+
+  it("renders leftover base64 images alongside allowlisted URLs", () => {
+    const { hostMessage, gallery, status } = mountWidget();
+    const url = "https://nai.hoshinoaya.com/i/img_" + "cd".repeat(16) + ".webp";
+    hostMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: {
+        structuredContent: {
+          model: "nai-diffusion-4-5-full",
+          images: [{ url }, { url: "https://evil.example/x.png" }],
+        },
+        content: [
+          { type: "text", text: "{}" },
+          { type: "image", data: PNG_1X1, mimeType: "image/png" },
+        ],
+      },
+    });
+    expect(gallery.nodes).toHaveLength(2);
+    expect(gallery.nodes[0]?.src).toBe(url);
+    expect(gallery.nodes[1]?.src).toBe("data:image/png;base64," + PNG_1X1);
+    expect(status.textContent).toMatch(/2 images/);
+  });
+
   it("shows the tool error instead of claiming the host hid a successful image", () => {
     const { hostMessage, status, gallery } = mountWidget();
     hostMessage({

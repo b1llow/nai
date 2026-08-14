@@ -1,12 +1,12 @@
-import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_WIDGET_RENDER_TOOL, IMAGE_WIDGET_URI } from "../src/mcp/image-widget";
-import { createNaiMcpServer } from "../src/mcp/server";
+import { createNaiMcpServer, handleMcp } from "../src/mcp/server";
 import { collectPreviewImageIds } from "../src/mcp/tools";
 import { base64ToBytes } from "../src/nai/binary";
 import { HttpError } from "../src/errors";
-import { testEnv } from "./helpers";
+import { testEnv, testExecutionContext } from "./helpers";
 
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -394,6 +394,55 @@ describe("MCP image_id flow", () => {
     } finally {
       await client.close();
       await server.close();
+    }
+  });
+
+  it("handleMcp publishes image_url on the request origin", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/ai/generate-image") && !url.includes("suggest")) {
+          return new Response(pngZip(), {
+            headers: { "content-type": "application/zip" },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+
+    const env = testEnv();
+    const ctx = testExecutionContext();
+    const transport = new StreamableHTTPClientTransport(
+      new URL("http://127.0.0.1:8787/mcp"),
+      {
+        requestInit: {
+          headers: {
+            Authorization: AUTH,
+            Host: "127.0.0.1:8787",
+          },
+        },
+        fetch: (input, init) => {
+          const headers = new Headers(init?.headers);
+          if (!headers.has("Host")) headers.set("Host", "127.0.0.1:8787");
+          return handleMcp(new Request(input, { ...init, headers }), env, ctx);
+        },
+      },
+    );
+    const client = new Client({ name: "origin-flow-test", version: "0.0.1" });
+    await client.connect(transport);
+    try {
+      const generated = await client.callTool({
+        name: "nai_generate_image",
+        arguments: { prompt: "1girl", seed: 1 },
+      });
+      expect(generated.isError).not.toBe(true);
+      const gen = generated.structuredContent as { image_url: string };
+      expect(gen.image_url).toMatch(
+        /^http:\/\/127\.0\.0\.1:8787\/i\/img_[a-f0-9]{32}\.webp$/,
+      );
+    } finally {
+      await client.close();
     }
   });
 

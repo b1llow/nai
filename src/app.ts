@@ -105,6 +105,12 @@ app.get("/health", (c) => {
   return c.json(healthPayload());
 });
 
+app.use("/i/*", async (c, next) => {
+  if (c.req.method === "OPTIONS") return next();
+  await enforceIpRateLimit(c.env, c.req.raw);
+  await next();
+});
+
 app.on(["GET", "HEAD"], "/i/:file", (c) =>
   servePublicImage(c.env, c.req.param("file"), c.req.raw),
 );

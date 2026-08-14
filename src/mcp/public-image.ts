@@ -136,6 +136,18 @@ export async function publishImage(
   }
 }
 
+function normalizeEtag(token: string): string {
+  return token.trim().replace(/^W\//i, "").trim();
+}
+
+/** RFC 9110 If-None-Match: `*`, weak validators, and comma-separated lists. */
+export function ifNoneMatchHits(inm: string, etag: string): boolean {
+  const tokens = inm.split(",").map((part) => part.trim()).filter(Boolean);
+  if (tokens.includes("*")) return true;
+  const want = normalizeEtag(etag);
+  return tokens.some((token) => normalizeEtag(token) === want);
+}
+
 function publicImageNotFound(): Response {
   return new Response("Not Found", {
     status: 404,
@@ -170,7 +182,7 @@ export async function servePublicImage(
   if (obj.size) headers.set("Content-Length", String(obj.size));
 
   const inm = request?.headers.get("If-None-Match");
-  if (inm && obj.httpEtag && inm === obj.httpEtag) {
+  if (inm && obj.httpEtag && ifNoneMatchHits(inm, obj.httpEtag)) {
     return new Response(null, { status: 304, headers });
   }
   if (request?.method === "HEAD") {

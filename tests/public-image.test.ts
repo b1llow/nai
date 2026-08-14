@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import app from "../src/app";
 import { PUBLIC_IMAGE_CACHE_CONTROL } from "../src/limits";
 import {
+  ifNoneMatchHits,
+  originalImageKey,
   parsePublicImageFile,
   publicImageKey,
   publicImageOrigin,
@@ -121,6 +123,21 @@ describe("GET /i/:file", () => {
       }),
     );
     expect(again.status).toBe(304);
+
+    const weak = await servePublicImage(
+      env,
+      `${IMAGE_ID}.webp`,
+      new Request(`https://nai.hoshinoaya.com/i/${IMAGE_ID}.webp`, {
+        headers: { "If-None-Match": `W/${etag}, "other"` },
+      }),
+    );
+    expect(weak.status).toBe(304);
+  });
+
+  it("treats If-None-Match lists and weak validators as hits", () => {
+    expect(ifNoneMatchHits(`W/"abc", "def"`, `"abc"`)).toBe(true);
+    expect(ifNoneMatchHits("*", `"abc"`)).toBe(true);
+    expect(ifNoneMatchHits(`"nope"`, `"abc"`)).toBe(false);
   });
 
   it("returns 404 for missing, invalid, or private keys", async () => {
@@ -141,5 +158,51 @@ describe("GET /i/:file", () => {
     await publishImage(env, "https://nai.hoshinoaya.com", IMAGE_ID, PNG_BYTES);
     const res = await app.request(`/i/${IMAGE_ID}.webp`, {}, env);
     expect(res.status).toBe(200);
+  });
+
+  it("does not serve orig/ objects through the public /i/ route", async () => {
+    const env = testEnv();
+    await env.IMG_BUCKET!.put(originalImageKey(IMAGE_ID), PNG_BYTES, {
+      httpMetadata: { contentType: "image/png" },
+    });
+    const res = await app.request(`/i/${IMAGE_ID}.png`, {}, env);
+    expect(res.status).toBe(404);
+    expect(await env.IMG_BUCKET!.head(originalImageKey(IMAGE_ID))).not.toBeNull();
+  });
+
+  it("rate-limits public image fetches and skips OPTIONS", async () => {
+    const env = testEnv({
+      API_RATE_LIMIT: { limit: async () => ({ success: false }) },
+    });
+    const denied = await app.request(
+      `/i/${IMAGE_ID}.webp`,
+      { headers: { "cf-connecting-ip": "203.0.113.9" } },
+      env,
+    );
+    expect(denied.status).toBe(429);
+    expect(denied.headers.get("Retry-After")).toBe("60");
+
+    let called = 0;
+    const preflight = await app.request(
+      `/i/${IMAGE_ID}.webp`,
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://example.com",
+          "Access-Control-Request-Method": "GET",
+        },
+      },
+      {
+        ...testEnv(),
+        API_RATE_LIMIT: {
+          limit: async () => {
+            called += 1;
+            return { success: false };
+          },
+        },
+      },
+    );
+    expect(called).toBe(0);
+    expect(preflight.status).toBeLessThan(400);
   });
 });

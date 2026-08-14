@@ -148,6 +148,7 @@ describe("MCP tools/list schemas", () => {
       expect(html).toContain("result.isError");
       expect(html).toContain('block.type !== "image"');
       expect(html).toContain("urlImages");
+      expect(html).toContain("isAllowedImageUrl");
       expect(html).toContain("image_url");
       const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
       expect(script).toBeDefined();

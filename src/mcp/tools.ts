@@ -496,7 +496,7 @@ export function registerNaiTools(
     {
       title: "Render image preview",
       description:
-        "Mount the NovelAI image preview UI in ChatGPT. Always call this after nai_generate_image, nai_upscale, or nai_director when the user should see the image. Pass image_id (and image_ids when n_samples > 1). You cannot open ui:// URIs yourself — this tool is what binds ui://novelai/image-preview-v3.html. Do not pass PNG base64 or filenames.",
+        "Mount the NovelAI image preview UI in ChatGPT. Always call this after nai_generate_image, nai_upscale, or nai_director when the user should see the image. Pass image_id (and image_ids when n_samples > 1). You cannot open ui:// URIs yourself — this tool is what binds ui://novelai/image-preview-v4.html. Do not pass PNG base64 or filenames.",
       inputSchema: z.object({
         image_id: z
           .string()
