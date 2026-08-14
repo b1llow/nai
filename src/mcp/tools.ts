@@ -44,7 +44,8 @@ import {
   vibeIeKey,
 } from "./artifacts";
 import { imageWidgetToolMeta, registerImageWidget } from "./image-widget";
-import { mcpJson, mcpText, runTool, withImages } from "./result";
+import { publishImage } from "./public-image";
+import { mcpJson, mcpText, runTool, withImages, type McpContent } from "./result";
 
 const pixelDim = z
   .number()
@@ -127,11 +128,13 @@ const storedImageOutputSchema = z.object({
   width: z.number().optional(),
   height: z.number().optional(),
   resource_uri: z.string().optional(),
+  url: z.string().optional(),
   skipped: z.string().optional(),
 });
 
 const imageMetaOutputSchema = z.object({
   image_id: z.string().nullable(),
+  image_url: z.string().optional(),
   images: z.array(storedImageOutputSchema),
   seed: z.number(),
   model: z.string(),
@@ -142,12 +145,14 @@ const imageMetaOutputSchema = z.object({
 
 const upscaleOutputSchema = z.object({
   image_id: z.string().nullable(),
+  image_url: z.string().optional(),
   images: z.array(storedImageOutputSchema),
   scale: z.union([z.literal(2), z.literal(4)]),
 });
 
 const directorOutputSchema = z.object({
   image_id: z.string().nullable(),
+  image_url: z.string().optional(),
   images: z.array(storedImageOutputSchema),
   req_type: z.string(),
 });
@@ -159,6 +164,8 @@ const getImageOutputSchema = z.object({
   width: z.number().optional(),
   height: z.number().optional(),
   resource_uri: z.string(),
+  url: z.string().optional(),
+  image_url: z.string().optional(),
 });
 
 const tagsOutputSchema = z.object({
@@ -197,15 +204,16 @@ export function registerNaiTools(
   server: McpServer,
   env: Env,
   auth: string | null,
+  origin: string,
 ): void {
-  registerImageWidget(server);
+  registerImageWidget(server, origin);
 
   server.registerTool(
     "nai_generate_image",
     {
       title: "Generate image",
       description:
-        "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns PNG ImageContent plus image_id — pass that image_id to nai_upscale, nai_director, nai_encode_vibe, nai_get_image, or img2img. Do not pass filenames such as image_0.png, and do not echo PNG base64 back.",
+        "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns a public image_url (WebP) — embed that URL in markdown so the user can see the image. Also returns image_id — pass that image_id to nai_upscale, nai_director, nai_encode_vibe, nai_get_image, or img2img. Do not pass filenames such as image_0.png, and do not echo image bytes.",
       inputSchema: naiGenerateImageInputSchema,
       outputSchema: imageMetaOutputSchema,
       _meta: imageWidgetToolMeta("Generating image…", "Image ready"),
@@ -218,7 +226,7 @@ export function registerNaiTools(
           const input = await resolveGenerateInput(env, owner, args);
           const result = await generateImage(env, token, input);
           return withImages(
-            { env, owner },
+            { env, owner, origin },
             {
               seed: result.seed,
               model: result.model,
@@ -238,7 +246,7 @@ export function registerNaiTools(
     {
       title: "Upscale image",
       description:
-        "NovelAI 2x or 4x upscale. Costs Anlas. Pass image_id from a previous image tool (preferred) or PNG base64. Returns a new image_id.",
+        "NovelAI 2x or 4x upscale. Costs Anlas. Pass image_id from a previous image tool (preferred) or PNG base64. Returns a public image_url and a new image_id.",
       inputSchema: z.object({
         image: z.string().describe(IMAGE_REF_HINT),
         scale: z.union([z.literal(2), z.literal(4)]).optional(),
@@ -261,7 +269,7 @@ export function registerNaiTools(
             height: args.height ?? decoded.height,
           });
           return withImages(
-            { env, owner },
+            { env, owner, origin },
             { scale: args.scale === 4 ? 4 : 2 },
             images,
           );
@@ -275,7 +283,7 @@ export function registerNaiTools(
     {
       title: "Director tools",
       description:
-        "NovelAI Director Tools: lineart, sketch, colorize, emotion, declutter, bg-removal. Pass image_id from a previous image tool (preferred) or PNG base64. Width/height default from stored metadata or the PNG IHDR. Returns a new image_id.",
+        "NovelAI Director Tools: lineart, sketch, colorize, emotion, declutter, bg-removal. Pass image_id from a previous image tool (preferred) or PNG base64. Width/height default from stored metadata or the PNG IHDR. Returns a public image_url and a new image_id.",
       inputSchema: z.object({
         req_type: z.enum(DIRECTOR_TYPES),
         image: z.string().describe(IMAGE_REF_HINT),
@@ -301,7 +309,7 @@ export function registerNaiTools(
             width: args.width ?? decoded.width,
             height: args.height ?? decoded.height,
           });
-          return withImages({ env, owner }, { req_type: args.req_type }, images);
+          return withImages({ env, owner, origin }, { req_type: args.req_type }, images);
         },
         { widget: true },
       ),
@@ -392,7 +400,7 @@ export function registerNaiTools(
     {
       title: "Get stored image",
       description:
-        "Reload a previously generated image by image_id. Use when the host cannot read nai://image resources, or to re-display an image from an earlier turn. Pass image_id — not a filename.",
+        "Reload a previously generated image by image_id. Returns the public image_url (re-publishes the WebP if needed). Pass image_id — not a filename.",
       inputSchema: z.object({
         image_id: z
           .string()
@@ -407,32 +415,53 @@ export function registerNaiTools(
         async (token) => {
           const owner = await artifactOwner(token);
           const img = await getImage(env, owner, args.image_id, "image_id");
-          const structuredContent = {
+          const published = await publishImage(env, origin, img.id, img.bytes);
+          const structuredContent: {
+            image_id: string;
+            filename: string;
+            mime_type: string;
+            width?: number;
+            height?: number;
+            resource_uri: string;
+            url?: string;
+            image_url?: string;
+          } = {
             image_id: img.id,
             filename: img.name,
-            mime_type: img.mime,
+            mime_type: published?.mime ?? img.mime,
             width: img.width,
             height: img.height,
             resource_uri: imageResourceUri(img.id),
           };
-          return {
-            content: [
-              { type: "text", text: JSON.stringify(structuredContent, null, 2) },
-              {
-                type: "image",
-                data: img.base64,
-                mimeType: img.mime,
-                annotations: { audience: ["user"] as Array<"user" | "assistant"> },
-              },
-              {
-                type: "resource_link",
-                uri: structuredContent.resource_uri,
-                name: img.name,
-                mimeType: img.mime,
-              },
-            ],
-            structuredContent,
-          };
+          if (published) {
+            structuredContent.url = published.url;
+            structuredContent.image_url = published.url;
+          }
+          const content: McpContent[] = [
+            { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+          ];
+          if (published) {
+            content.push({
+              type: "resource_link",
+              uri: published.url,
+              name: published.filename,
+              mimeType: published.mime,
+            });
+          } else {
+            content.push({
+              type: "image",
+              data: img.base64,
+              mimeType: img.mime,
+              annotations: { audience: ["user"] as Array<"user" | "assistant"> },
+            });
+            content.push({
+              type: "resource_link",
+              uri: structuredContent.resource_uri,
+              name: img.name,
+              mimeType: img.mime,
+            });
+          }
+          return { content, structuredContent };
         },
         { widget: true },
       ),

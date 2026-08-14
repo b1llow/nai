@@ -26,6 +26,7 @@ In short: keep using the NovelAI models you pay for, without rewriting every cli
 |--------|------|--------|
 | `GET` | `/` | Service info |
 | `GET` | `/health` | Liveness. JSON `{ ok, revision }` — `revision` is the git SHA stamped before the Worker is bundled (`null` only if install/deploy could not resolve a SHA) |
+| `GET` | `/i/:file` | Public generated image (WebP, or PNG fallback). Capability URL; no auth |
 | `POST`/`GET` | `/mcp` | Remote MCP (Streamable HTTP). OAuth or NovelAI Bearer |
 | `GET`/`POST` | `/authorize` | MCP OAuth consent (paste Persistent API token) |
 | `POST` | `/oauth/token` | OAuth token + refresh |
@@ -92,10 +93,10 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 
 | Tool | Upstream |
 |------|----------|
-| `nai_generate_image` | `image.novelai.net` `/ai/generate-image` (txt2img / img2img / infill, V4.5 characters, vibe, director reference). Returns `image_id`. |
-| `nai_upscale` | `api.novelai.net` `/ai/upscale`. Accepts `image_id` or PNG base64. |
-| `nai_director` | `image.novelai.net` `/ai/augment-image`. Accepts `image_id` or PNG base64. |
-| `nai_get_image` | Reload a stored PNG by `image_id` (for hosts that cannot `resources/read`) |
+| `nai_generate_image` | `image.novelai.net` `/ai/generate-image` (txt2img / img2img / infill, V4.5 characters, vibe, director reference). Returns `image_url` + `image_id`. |
+| `nai_upscale` | `api.novelai.net` `/ai/upscale`. Accepts `image_id` or PNG base64. Returns `image_url` + `image_id`. |
+| `nai_director` | `image.novelai.net` `/ai/augment-image`. Accepts `image_id` or PNG base64. Returns `image_url` + `image_id`. |
+| `nai_get_image` | Reload a stored image by `image_id` (re-publishes the public URL if needed) |
 | `nai_suggest_tags` | `/ai/generate-image/suggest-tags` |
 | `nai_encode_vibe` | `/ai/encode-vibe`. Returns `vibe_id` (token stays server-side; repeats are cached). |
 | `nai_chat` | existing OpenAI-compatible chat proxy |
@@ -105,17 +106,15 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_subscription` | `image.novelai.net` `/user/subscription` |
 | `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
 
-Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, `nai://image/{image_id}` (generated PNGs; not listed), and `ui://novelai/image-preview-v2.html` (MCP App / ChatGPT output template for inline image preview).
+Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, `nai://image/{image_id}` (original PNGs for tool chaining; not listed), and `ui://novelai/image-preview-v3.html` (MCP App / ChatGPT output template for inline image preview).
 
 Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
 
-Image tools return MCP `image` content (PNG) for the current client UI **and** an `image_id` / `nai://image/...` handle for later tool calls. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, or img2img — not a filename such as `image_0.png`, and not the PNG base64. Artifacts are stored in Workers KV for 24 hours, scoped to the NovelAI token. KV is eventually consistent across PoPs; if an `image_id` miss happens, retry, regenerate, or pass PNG base64.
+Image tools return a public `image_url` (`https://nai.hoshinoaya.com/i/img_<id>.webp`) plus an `image_id` / `nai://image/...` handle for later tool calls. Clients can render the URL with a normal `<img src>` or markdown image. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, or img2img — not a filename such as `image_0.png`, and not image bytes. Original PNGs live in R2 (`orig/<id>.png`), scoped to the NovelAI token, and never expire. The public WebP (quality 99) is a separate R2 object served by `GET /i/:file` with `Cache-Control: public, max-age=31536000, immutable`. URLs are capability URLs (128-bit `img_` id, no auth). If R2 or the Images binding is unavailable, tools fall back to PNG ImageContent.
 
-V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
+V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached in KV. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
 
-`nai_generate_image`, `nai_upscale`, `nai_director`, and `nai_get_image` advertise `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. ChatGPT also receives the same envelope on tool-result `_meta.mcp_tool_result` / `call_tool_result` (widget-only; the model still sees `structuredContent` without PNG bytes). The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin). The widget renders those image blocks as data URLs and shows tool errors instead of a false “image was hidden” status. It does not fetch remote URLs.
-
-Tool `ImageContent` can appear in the host's tool-result UI. That is a different channel from the final assistant message; this server cannot promote a tool image into the chat bubble. There is no public HTTPS image CDN.
+`nai_generate_image`, `nai_upscale`, `nai_director`, and `nai_get_image` advertise `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. ChatGPT also receives the same envelope on tool-result `_meta.mcp_tool_result` / `call_tool_result` (widget-only; the model still sees `structuredContent` without image bytes). The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin), and allows that origin in the widget CSP `resourceDomains` so the preview can load the public URL. The widget prefers `structuredContent.images[].url` and falls back to base64 image blocks. It shows tool errors instead of a false “image was hidden” status.
 
 Not implemented: login/register, encrypted story objects / keystore, module training, `/ai/classify`, stepwise image streaming.
 
@@ -282,7 +281,8 @@ Client (OpenAI SDK / ST / curl / MCP / ChatGPT)
         │
         ├── text.novelai.net   /oa/v1/*  /ai/generate
         ├── image.novelai.net  /ai/generate-image  /ai/augment-image  /user/subscription
-        └── api.novelai.net    /ai/upscale  /ai/generate-voice
+        ├── api.novelai.net    /ai/upscale  /ai/generate-voice
+        └── R2 nai-images      orig/*.png (private)  i/*.webp (public)
 ```
 
 | Area | Module |
@@ -310,12 +310,14 @@ Chat and Responses always request `stream: true` from NovelAI. Non-stream client
 | `NAI_IMAGE_BASE_URL` | yes | Image API origin (also `/user/subscription` and `/user/information`). Must be `https://image.novelai.net` |
 | `NAI_API_BASE_URL` | yes | Upscale / TTS origin. Must be `https://api.novelai.net` |
 | `NAI_ALLOW_UNSAFE_BASE_URL` | no | Set to `1` only for local mocks; skips the host allowlist but still requires `http(s)` and rejects URLs with credentials |
-| `OAUTH_KV` | yes (MCP OAuth) | Workers KV for OAuth clients, grants, and short-lived consent sessions. NovelAI tokens in grants are encrypted by `workers-oauth-provider`. |
+| `OAUTH_KV` | yes (MCP OAuth) | Workers KV for OAuth clients, grants, short-lived consent sessions, and vibe tokens. NovelAI tokens in grants are encrypted by `workers-oauth-provider`. |
+| `IMG_BUCKET` | yes (image tools) | R2 bucket `nai-images`. Original PNGs at `orig/<image_id>.png`; public WebP (or PNG fallback) at `i/<image_id>.<ext>`. |
+| `IMAGES` | yes (image tools) | Cloudflare Images binding. Encodes generated PNGs to WebP quality 99 before the public put. Missing/failing falls back to a public PNG. |
 | `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` and `/mcp` |
 | `OAUTH_AUTHORIZE_RATE_LIMIT` | no | 30 requests / 60s per client IP on `GET`/`POST /authorize` |
 | `OAUTH_REGISTER_RATE_LIMIT` | no | 8 requests / 60s per client IP on `POST /oauth/register` |
 
-Authenticated `/v1/*` and `/mcp` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB on `/v1` and 20 MiB on `/mcp` (img2img); the MCP cap is enforced on the actual body, not only `Content-Length`. Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
+Authenticated `/v1/*` and `/mcp` responses set `Cache-Control: private, no-store`. Public `/i/:file` responses set `Cache-Control: public, max-age=31536000, immutable`. POST bodies are capped at 2 MiB on `/v1` and 20 MiB on `/mcp` (img2img); the MCP cap is enforced on the actual body, not only `Content-Length`. Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
 
 Callers must supply the NovelAI token per request (`Authorization: Bearer <token>`) on `/v1/*`. `/mcp` accepts either an OAuth access token issued by this Worker or a NovelAI Bearer token (compat). Tokens must be printable ASCII Bearer credentials (8–4096 chars).
 

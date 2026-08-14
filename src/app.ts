@@ -12,6 +12,7 @@ import { parseAuthorization } from "./auth";
 import { MAX_BODY_BYTES, safeIdent } from "./limits";
 import { enforceIpRateLimit } from "./ratelimit";
 import { healthPayload } from "./revision";
+import { servePublicImage } from "./mcp/public-image";
 
 const app = new Hono<AppEnv>();
 
@@ -90,6 +91,7 @@ app.get("/", (c) =>
     endpoints: [
       "/mcp",
       "/authorize",
+      "/i/:file",
       "/v1/models",
       "/v1/chat/completions",
       "/v1/responses",
@@ -102,6 +104,10 @@ app.get("/health", (c) => {
   c.header("Cache-Control", "no-store");
   return c.json(healthPayload());
 });
+
+app.on(["GET", "HEAD"], "/i/:file", (c) =>
+  servePublicImage(c.env, c.req.param("file"), c.req.raw),
+);
 
 app.get("/v1/models", listModels);
 app.get("/v1/models/:id", getModel);

@@ -67,13 +67,18 @@ describe("MCP image_id flow", () => {
       });
       const gen = generated.structuredContent as {
         image_id: string;
-        images: Array<{ filename: string }>;
+        image_url: string;
+        images: Array<{ filename: string; url: string }>;
         files?: unknown;
       };
       expect(generated.isError).not.toBe(true);
       expect(gen.files).toBeUndefined();
       expect(gen.image_id).toMatch(/^img_[a-f0-9]{32}$/);
+      expect(gen.image_url).toBe(
+        `https://nai.hoshinoaya.com/i/${gen.image_id}.webp`,
+      );
       expect(gen.images[0]?.filename).toBe("image_0.png");
+      expect(gen.images[0]?.url).toBe(gen.image_url);
       expect(generated._meta).toMatchObject({
         mcp_tool_result: {
           structuredContent: { image_id: gen.image_id },
@@ -98,8 +103,12 @@ describe("MCP image_id flow", () => {
         arguments: { image_id: gen.image_id },
       });
       expect(reloaded.isError).not.toBe(true);
-      const got = reloaded.structuredContent as { image_id: string };
+      const got = reloaded.structuredContent as {
+        image_id: string;
+        image_url: string;
+      };
       expect(got.image_id).toBe(gen.image_id);
+      expect(got.image_url).toBe(gen.image_url);
 
       const resource = await client.readResource({
         uri: `nai://image/${gen.image_id}`,
@@ -284,7 +293,7 @@ describe("MCP image_id flow", () => {
         throw new Error("expected readResource to fail");
       } catch (err) {
         expect(err).toBeInstanceOf(Error);
-        expect((err as Error).message).toMatch(/not found or has expired/);
+        expect((err as Error).message).toMatch(/not found/);
         expect((err as { code?: number }).code).not.toBe(-32603);
       }
     } finally {

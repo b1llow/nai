@@ -28,9 +28,12 @@ export const MAX_MCP_BODY_BYTES = 20 * 1024 * 1024;
 export const MAX_AUTHORIZE_BODY_BYTES = 64 * 1024;
 export const OAUTH_CONSENT_TTL_SECONDS = 600;
 export const MAX_BINARY_RESPONSE_BYTES = 32 * 1024 * 1024;
-/** KV value cap is 25 MiB; stay under it so image_id persist can fail open. */
+/** Size gate for stored image/vibe artifacts. Persist fails open above this. */
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
+/** Vibe tokens / vibe cache in KV. Image artifacts in R2 do not expire. */
 export const ARTIFACT_TTL_SECONDS = 24 * 60 * 60;
+export const PUBLIC_IMAGE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+export const PUBLIC_WEBP_QUALITY = 99;
 export const MAX_IMAGE_INPUT_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_PROMPT_CHARS = 8_000;
 export const MAX_IMAGE_SAMPLES = 4;
@@ -69,6 +72,17 @@ export function mcpResourceFromRequest(request: Request): string {
     /* ignore */
   }
   return MCP_RESOURCE;
+}
+
+/** Public image URL origin. Unknown hosts stay pinned to {@link MCP_ISSUER}. */
+export function mcpOriginFromRequest(request: Request): string {
+  try {
+    const url = new URL(request.url);
+    if (isAllowedMcpHostname(url.hostname)) return url.origin;
+  } catch {
+    /* ignore */
+  }
+  return MCP_ISSUER;
 }
 
 export type NaiHostKind = "text" | "image" | "api";

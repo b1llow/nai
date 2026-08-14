@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { MCP_ISSUER } from "../limits";
 
-export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v2.html";
+export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v3.html";
 export const IMAGE_WIDGET_MIME_TYPE = "text/html;profile=mcp-app";
 export const IMAGE_WIDGET_PROTOCOL_VERSION = "2026-01-26";
 /** Unique origin ChatGPT uses to sandbox this template (required for app submission). */
@@ -19,7 +19,11 @@ export function imageWidgetToolMeta(
   };
 }
 
-export function registerImageWidget(server: McpServer): void {
+export function registerImageWidget(
+  server: McpServer,
+  origin: string = MCP_ISSUER,
+): void {
+  const resourceDomains = [...new Set([origin, MCP_ISSUER])];
   server.registerResource(
     "image-preview-widget",
     IMAGE_WIDGET_URI,
@@ -40,14 +44,14 @@ export function registerImageWidget(server: McpServer): void {
               prefersBorder: true,
               csp: {
                 connectDomains: [],
-                resourceDomains: [],
+                resourceDomains,
               },
             },
             "openai/widgetDomain": IMAGE_WIDGET_DOMAIN,
             "openai/widgetPrefersBorder": true,
             "openai/widgetCSP": {
               connect_domains: [],
-              resource_domains: [],
+              resource_domains: resourceDomains,
             },
           },
         },
@@ -111,6 +115,29 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
             .filter(Boolean);
         }
 
+        function isHttpUrl(value) {
+          try {
+            const parsed = new URL(value);
+            return parsed.protocol === "https:" || parsed.protocol === "http:";
+          } catch {
+            return false;
+          }
+        }
+
+        function urlImages(result) {
+          const data = result && result.structuredContent;
+          if (!data || typeof data !== "object") return [];
+          const images = Array.isArray(data.images) ? data.images : [];
+          const urls = images
+            .map((img) => (img && typeof img.url === "string" ? img.url : ""))
+            .filter(isHttpUrl);
+          if (urls.length) return urls;
+          if (typeof data.image_url === "string" && isHttpUrl(data.image_url)) {
+            return [data.image_url];
+          }
+          return [];
+        }
+
         function imageBlocks(result) {
           if (!result || !Array.isArray(result.content)) return [];
           return result.content.filter((block) => {
@@ -142,14 +169,29 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
             return;
           }
 
-          const blocks = imageBlocks(result);
-          if (!blocks.length) {
+          const urls = urlImages(result);
+          const blocks = urls.length ? [] : imageBlocks(result);
+          if (!urls.length && !blocks.length) {
             status.textContent = textBlocks(result)[0]
-              || "The image was generated, but this host did not expose its image block to the preview.";
+              || "The image was generated, but this host did not expose its image URL to the preview.";
             return;
           }
 
-          status.textContent = blocks.length === 1 ? summary(result) : summary(result) + " · " + blocks.length + " images";
+          const count = urls.length || blocks.length;
+          status.textContent = count === 1 ? summary(result) : summary(result) + " · " + count + " images";
+          if (urls.length) {
+            urls.forEach((url, index) => {
+              const figure = document.createElement("figure");
+              const image = document.createElement("img");
+              const caption = document.createElement("figcaption");
+              image.alt = urls.length === 1 ? "NovelAI generated image" : "NovelAI generated image " + String(index + 1);
+              image.src = url;
+              caption.textContent = urls.length === 1 ? "Generated image" : "Image " + String(index + 1);
+              figure.append(image, caption);
+              gallery.append(figure);
+            });
+            return;
+          }
           blocks.forEach((block, index) => {
             const figure = document.createElement("figure");
             const image = document.createElement("img");

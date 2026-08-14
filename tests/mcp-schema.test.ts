@@ -84,6 +84,7 @@ describe("MCP tools/list schemas", () => {
       expect(values).not.toContain("1024x1024");
       expect(values).not.toContain("portrait");
       expect(generate?.outputSchema?.properties).toHaveProperty("image_id");
+      expect(generate?.outputSchema?.properties).toHaveProperty("image_url");
       expect(generate?.outputSchema?.properties).toHaveProperty("images");
       expect(generate?.outputSchema?.properties).toHaveProperty("seed");
       expect(generate?.outputSchema?.properties).not.toHaveProperty("files");
@@ -115,7 +116,10 @@ describe("MCP tools/list schemas", () => {
           ui: {
             domain: IMAGE_WIDGET_DOMAIN,
             prefersBorder: true,
-            csp: { connectDomains: [], resourceDomains: [] },
+            csp: {
+              connectDomains: [],
+              resourceDomains: ["https://nai.hoshinoaya.com"],
+            },
           },
           "openai/widgetDomain": IMAGE_WIDGET_DOMAIN,
         },
@@ -133,6 +137,8 @@ describe("MCP tools/list schemas", () => {
       expect(html).toContain("mcp_tool_result");
       expect(html).toContain("result.isError");
       expect(html).toContain('block.type !== "image"');
+      expect(html).toContain("urlImages");
+      expect(html).toContain("image_url");
       const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
       expect(script).toBeDefined();
       expect(() => new Function(script!)).not.toThrow();

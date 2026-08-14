@@ -3,6 +3,8 @@
 // Runtime types generated with workerd@1.20260811.1 2026-08-13 global_fetch_strictly_public,nodejs_compat
 interface __BaseEnv_Env {
 	OAUTH_KV: KVNamespace;
+	IMG_BUCKET: R2Bucket;
+	IMAGES: ImagesBinding;
 	API_RATE_LIMIT: RateLimit;
 	OAUTH_AUTHORIZE_RATE_LIMIT: RateLimit;
 	OAUTH_REGISTER_RATE_LIMIT: RateLimit;

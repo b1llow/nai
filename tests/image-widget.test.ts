@@ -85,7 +85,7 @@ function mountWidget(openai?: Record<string, unknown>) {
   return { posted, status, gallery, emit, hostMessage, windowObj };
 }
 
-function imageResult(isError = false) {
+function imageResult(isError = false, urls?: string[]) {
   return {
     isError,
     structuredContent: {
@@ -93,13 +93,17 @@ function imageResult(isError = false) {
       seed: 7,
       width: 832,
       height: 1216,
+      image_url: urls?.[0],
+      images: urls?.map((url) => ({ url })),
     },
     content: isError
       ? [{ type: "text", text: "Missing NovelAI Persistent API token." }]
-      : [
-          { type: "text", text: '{"image_id":"img_abc"}' },
-          { type: "image", data: PNG_1X1, mimeType: "image/png" },
-        ],
+      : urls
+        ? [{ type: "text", text: '{"image_id":"img_abc"}' }]
+        : [
+            { type: "text", text: '{"image_id":"img_abc"}' },
+            { type: "image", data: PNG_1X1, mimeType: "image/png" },
+          ],
   };
 }
 
@@ -171,6 +175,19 @@ describe("image preview widget", () => {
     });
     expect(gallery.nodes).toHaveLength(1);
     expect(gallery.nodes[0]?.alt).toBe("NovelAI generated image");
+  });
+
+  it("renders public https image URLs from structuredContent", () => {
+    const { hostMessage, status, gallery } = mountWidget();
+    const url = "https://nai.hoshinoaya.com/i/img_" + "ab".repeat(16) + ".webp";
+    hostMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: imageResult(false, [url]),
+    });
+    expect(status.textContent).toBe("nai-diffusion-4-5-full · seed 7 · 832 × 1216");
+    expect(gallery.nodes).toHaveLength(1);
+    expect(gallery.nodes[0]?.src).toBe(url);
   });
 
   it("shows the tool error instead of claiming the host hid a successful image", () => {

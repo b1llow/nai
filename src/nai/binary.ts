@@ -4,6 +4,13 @@ const PNG_MAGIC = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
 const ZIP_MAGIC = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
 
+export function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+}
+
 export function bytesToBase64(bytes: Uint8Array): string {
   return Buffer.from(
     bytes.buffer,

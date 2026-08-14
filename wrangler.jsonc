@@ -55,6 +55,15 @@
       "id": "52799448e7ed4f9eb5819e2952545e92"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "IMG_BUCKET",
+      "bucket_name": "nai-images"
+    }
+  ],
+  "images": {
+    "binding": "IMAGES"
+  },
   "routes": [
     {
       "pattern": "nai.hoshinoaya.com",
