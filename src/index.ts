@@ -1,6 +1,7 @@
 import type { Env } from "./env";
 import { unhandledToResponse } from "./errors";
 import { requestPath } from "./log";
+import { ensurePersistentGrokClient } from "./oauth/grok-client";
 import { oauthProviderFor } from "./oauth/provider";
 import { enforceIpRateLimit } from "./ratelimit";
 
@@ -14,6 +15,12 @@ export default {
       const url = new URL(request.url);
       if (request.method === "POST" && url.pathname === "/oauth/register") {
         await enforceIpRateLimit(env, request, env.OAUTH_REGISTER_RATE_LIMIT);
+      }
+      if (
+        env.OAUTH_KV &&
+        (url.pathname === "/authorize" || url.pathname === "/oauth/token")
+      ) {
+        await ensurePersistentGrokClient(env.OAUTH_KV);
       }
       return await oauthProviderFor(request).fetch(request, env, ctx);
     } catch (err) {

@@ -5,6 +5,26 @@ import {
 } from "../src/oauth/redirects";
 
 describe("isAllowedOAuthRedirect", () => {
+  it("allows the Grok connector callback", () => {
+    expect(
+      isAllowedOAuthRedirect("https://grok.com/connectors-oauth-exchange-code/"),
+    ).toBe(true);
+    expect(
+      isAllowedOAuthRedirect("https://grok.com/connectors-oauth-exchange-code"),
+    ).toBe(true);
+    expect(
+      isAllowedOAuthRedirect(
+        "https://www.grok.com/connectors-oauth-exchange-code/",
+      ),
+    ).toBe(true);
+    expect(isAllowedOAuthRedirect("https://grok.com/other")).toBe(false);
+    expect(
+      isAllowedOAuthRedirect(
+        "https://grok.com.evil.example/connectors-oauth-exchange-code/",
+      ),
+    ).toBe(false);
+  });
+
   it("allows ChatGPT, Claude, and loopback callbacks", () => {
     expect(
       isAllowedOAuthRedirect("https://chatgpt.com/connector/oauth/callback"),
@@ -50,6 +70,17 @@ describe("isAllowedOAuthRedirect", () => {
 });
 
 describe("clientRegistrationCallback", () => {
+  it("allows Grok DCR metadata", () => {
+    expect(
+      clientRegistrationCallback({
+        clientMetadata: {
+          redirect_uris: ["https://grok.com/connectors-oauth-exchange-code/"],
+        },
+        request: new Request("https://nai.hoshinoaya.com/oauth/register"),
+      }),
+    ).toBeUndefined();
+  });
+
   it("allows ChatGPT and Claude DCR metadata", () => {
     expect(
       clientRegistrationCallback({

@@ -51,7 +51,7 @@ The header is forwarded upstream unchanged.
 
 ChatGPT Cloud and other remote MCP hosts **cannot** set a custom `Authorization` header. This Worker is an OAuth 2.1 authorization server (PKCE S256, CIMD + DCR, refresh tokens). On `/authorize`, paste a NovelAI Persistent API token. The grant stores that token encrypted in Workers KV (`OAUTH_KV`) and issues ChatGPT its own access token. Completing OAuth does **not** send your NovelAI email or password to this Worker.
 
-Protected resource metadata pins `resource` to the request origin plus `/mcp` for hosts this Worker serves (`nai.hoshinoaya.com`, loopback, `*.workers.dev`). ChatGPT should use `https://nai.hoshinoaya.com/mcp`. Dynamic client registration only accepts loopback URLs, ChatGPT connector OAuth callbacks, and Claude's `https://claude.ai/api/mcp/auth_callback`. The consent page shows the client name (default **an MCP client**, never assumed to be ChatGPT), `client_id`, and `redirect_uri` so you can confirm the callback before pasting a token.
+Protected resource metadata pins `resource` to the request origin plus `/mcp` for hosts this Worker serves (`nai.hoshinoaya.com`, loopback, `*.workers.dev`). ChatGPT should use `https://nai.hoshinoaya.com/mcp`. Dynamic client registration only accepts loopback URLs, ChatGPT connector OAuth callbacks, Claude's `https://claude.ai/api/mcp/auth_callback`, and Grok's `https://grok.com/connectors-oauth-exchange-code/`. The consent page shows the client name (default **an MCP client**, never assumed to be ChatGPT), `client_id`, and `redirect_uri` so you can confirm the callback before pasting a token.
 
 ### ChatGPT (Developer Mode)
 
@@ -61,6 +61,18 @@ Protected resource metadata pins `resource` to the request origin plus `/mcp` fo
 4. ChatGPT refreshes access with `offline_access`; you should not need to paste the token on every chat.
 
 Create a persistent token in the NovelAI account settings. Do not send email/password to this worker. Do not put a NovelAI token in a Worker secret: this URL is public, and a shared fallback token would let anyone use your account.
+
+### Grok (grok.com Custom Connector)
+
+Grok does not perform dynamic client registration — its Custom Connector form asks for a pre-issued Client ID. This Worker writes a public PKCE client (`grok-connector`) into `OAUTH_KV` without the 90-day DCR TTL, so the same ID stays valid. Do not mint a Grok client via `POST /oauth/register`: those records expire and saved connectors then fail with an unknown client.
+
+At [grok.com/connectors](https://grok.com/connectors) → New Connector → Custom:
+
+1. Server URL: `https://nai.hoshinoaya.com/mcp` (the MCP endpoint, **not** `/authorize`).
+2. When Grok shows **OAuth Credentials Required**: Client ID = `grok-connector`, Client Secret = leave blank, PKCE = S256.
+3. Complete sign-in on `/authorize` by pasting a NovelAI Persistent API token.
+
+The `client_id` is a public identifier (no secret; every user authorizes it separately).
 
 ### Cursor / Claude Desktop
 
