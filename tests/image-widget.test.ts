@@ -23,7 +23,7 @@ function mountWidget(openai?: Record<string, unknown>) {
       posted.push(message);
     },
   };
-  const status = { textContent: "" };
+  const status = { textContent: "Preparing image preview…" };
   const gallery = {
     nodes: [] as Array<{ src: string; alt: string; caption: string }>,
     replaceChildren() {
