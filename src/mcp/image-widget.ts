@@ -1,12 +1,26 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { MCP_ISSUER } from "../limits";
 
-export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v2.html";
+export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v5.html";
 export const IMAGE_WIDGET_MIME_TYPE = "text/html;profile=mcp-app";
 export const IMAGE_WIDGET_PROTOCOL_VERSION = "2026-01-26";
 export const IMAGE_WIDGET_RENDER_TOOL = "nai_render_image_preview";
 /** Unique origin ChatGPT uses to sandbox this template (required for app submission). */
 export const IMAGE_WIDGET_DOMAIN = MCP_ISSUER;
+
+const ALLOWED_ORIGINS_TOKEN = "__NAI_ALLOWED_ORIGINS__";
+
+/** Same list as widget CSP `resourceDomains` / `resource_domains`. */
+export function widgetResourceDomains(origin: string): string[] {
+  return [...new Set([origin, MCP_ISSUER])];
+}
+
+export function imageWidgetHtml(origin: string = MCP_ISSUER): string {
+  return IMAGE_WIDGET_HTML_TEMPLATE.replaceAll(
+    ALLOWED_ORIGINS_TOKEN,
+    JSON.stringify(widgetResourceDomains(origin)),
+  );
+}
 
 /** Status text only — data tools must not bind the widget template. */
 export function imageToolStatusMeta(
@@ -33,7 +47,11 @@ export function imageWidgetToolMeta(
   };
 }
 
-export function registerImageWidget(server: McpServer): void {
+export function registerImageWidget(
+  server: McpServer,
+  origin: string = MCP_ISSUER,
+): void {
+  const resourceDomains = widgetResourceDomains(origin);
   server.registerResource(
     "image-preview-widget",
     IMAGE_WIDGET_URI,
@@ -47,21 +65,21 @@ export function registerImageWidget(server: McpServer): void {
         {
           uri: IMAGE_WIDGET_URI,
           mimeType: IMAGE_WIDGET_MIME_TYPE,
-          text: IMAGE_WIDGET_HTML,
+          text: imageWidgetHtml(origin),
           _meta: {
             ui: {
               domain: IMAGE_WIDGET_DOMAIN,
               prefersBorder: true,
               csp: {
                 connectDomains: [],
-                resourceDomains: [],
+                resourceDomains,
               },
             },
             "openai/widgetDomain": IMAGE_WIDGET_DOMAIN,
             "openai/widgetPrefersBorder": true,
             "openai/widgetCSP": {
               connect_domains: [],
-              resource_domains: [],
+              resource_domains: resourceDomains,
             },
           },
         },
@@ -70,7 +88,7 @@ export function registerImageWidget(server: McpServer): void {
   );
 }
 
-export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
+const IMAGE_WIDGET_HTML_TEMPLATE = String.raw`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -95,6 +113,7 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
       (() => {
         const status = document.getElementById("status");
         const gallery = document.getElementById("gallery");
+        const allowedOrigins = new Set(__NAI_ALLOWED_ORIGINS__);
         const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
         const initializeId = 1;
         let initialized = false;
@@ -123,6 +142,32 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
             .filter((block) => block && block.type === "text" && typeof block.text === "string")
             .map((block) => block.text.trim())
             .filter(Boolean);
+        }
+
+        function isAllowedImageUrl(value) {
+          try {
+            const parsed = new URL(value);
+            if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+            if (parsed.username || parsed.password) return false;
+            if (!allowedOrigins.has(parsed.origin)) return false;
+            return /^\/i\/img_[a-f0-9]{32}\.(webp|png)$/i.test(parsed.pathname);
+          } catch {
+            return false;
+          }
+        }
+
+        function urlImages(result) {
+          const data = result && result.structuredContent;
+          if (!data || typeof data !== "object") return [];
+          const images = Array.isArray(data.images) ? data.images : [];
+          const urls = images
+            .map((img) => (img && typeof img.url === "string" ? img.url : ""))
+            .filter(isAllowedImageUrl);
+          if (urls.length) return urls;
+          if (typeof data.image_url === "string" && isAllowedImageUrl(data.image_url)) {
+            return [data.image_url];
+          }
+          return [];
         }
 
         function imageBlocks(result) {
@@ -156,23 +201,29 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
             return;
           }
 
+          const urls = urlImages(result);
           const blocks = imageBlocks(result);
-          if (!blocks.length) {
+          if (!urls.length && !blocks.length) {
             status.textContent = textBlocks(result)[0]
-              || "The image was generated, but this host did not expose its image block to the preview.";
+              || "The image was generated, but this host did not expose its image URL to the preview.";
             return;
           }
 
-          status.textContent = blocks.length === 1 ? summary(result) : summary(result) + " · " + blocks.length + " images";
-          blocks.forEach((block, index) => {
+          const count = urls.length + blocks.length;
+          status.textContent = count === 1 ? summary(result) : summary(result) + " · " + count + " images";
+          function appendFigure(src, index) {
             const figure = document.createElement("figure");
             const image = document.createElement("img");
             const caption = document.createElement("figcaption");
-            image.alt = blocks.length === 1 ? "NovelAI generated image" : "NovelAI generated image " + String(index + 1);
-            image.src = "data:" + block.mimeType + ";base64," + block.data;
-            caption.textContent = blocks.length === 1 ? "Generated image" : "Image " + String(index + 1);
+            image.alt = count === 1 ? "NovelAI generated image" : "NovelAI generated image " + String(index + 1);
+            image.src = src;
+            caption.textContent = count === 1 ? "Generated image" : "Image " + String(index + 1);
             figure.append(image, caption);
             gallery.append(figure);
+          }
+          urls.forEach((url, index) => appendFigure(url, index));
+          blocks.forEach((block, index) => {
+            appendFigure("data:" + block.mimeType + ";base64," + block.data, urls.length + index);
           });
         }
 
@@ -229,3 +280,5 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
     </script>
   </body>
 </html>`;
+
+export const IMAGE_WIDGET_HTML = imageWidgetHtml();

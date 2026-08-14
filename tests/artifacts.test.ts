@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../src/errors";
-import { ARTIFACT_TTL_SECONDS, MAX_ARTIFACT_BYTES } from "../src/limits";
+import { MAX_ARTIFACT_BYTES } from "../src/limits";
+import { originalImageKey } from "../src/mcp/public-image";
+import { bytesToArrayBuffer } from "../src/nai/binary";
 import {
   getCachedVibe,
   getImage,
@@ -77,41 +79,72 @@ describe("image artifact store", () => {
       HttpError,
     );
     await expect(getImage(env, OTHER, id!, "image")).rejects.toThrow(
-      /not found or has expired/,
+      /not found/,
     );
     const missing = "img_" + "11".repeat(16);
     await expect(getImage(env, OWNER, missing, "image")).rejects.toThrow(
-      /not found or has expired/,
+      /not found/,
     );
   });
 
-  it("rejects expired keys without leaking them", async () => {
+  it("stores the original PNG in R2 with owner metadata, not KV", async () => {
     const env = testEnv();
+    const kvSpy = vi.spyOn(env.OAUTH_KV, "put");
+    const id = await putImage(env, OWNER, base64ToBytes(PNG_1X1), {
+      mime: "image/png",
+      name: "image_0.png",
+      width: 1,
+      height: 1,
+    });
+    expect(kvSpy).not.toHaveBeenCalled();
+    kvSpy.mockRestore();
+    const obj = await env.IMG_BUCKET!.get(originalImageKey(id!));
+    expect(obj).not.toBeNull();
+    expect(obj!.customMetadata).toMatchObject({
+      owner: OWNER,
+      mime: "image/png",
+      name: "image_0.png",
+      width: "1",
+      height: "1",
+    });
+  });
+
+  it("reads a legacy KV image_id when R2 has no object", async () => {
+    const env = testEnv();
+    const id = "img_" + "ab".repeat(16);
+    await env.OAUTH_KV.put(`img:${id}`, bytesToArrayBuffer(base64ToBytes(PNG_1X1)), {
+      metadata: {
+        owner: OWNER,
+        mime: "image/png",
+        name: "legacy.png",
+        width: 1,
+        height: 1,
+      },
+    });
+    const stored = await getImage(env, OWNER, id, "image");
+    expect(stored.name).toBe("legacy.png");
+    expect(stored.base64).toBe(PNG_1X1);
+    expect(stored.width).toBe(1);
+  });
+
+  it("does not revive an expired legacy KV image_id", async () => {
+    const env = testEnv();
+    const id = "img_" + "cd".repeat(16);
+    await env.OAUTH_KV.put(
+      `img:${id}`,
+      bytesToArrayBuffer(base64ToBytes(PNG_1X1)),
+      { expiration: 1, metadata: { owner: OWNER, mime: "image/png", name: "old.png" } },
+    );
+    await expect(getImage(env, OWNER, id, "image")).rejects.toThrow(/not found/);
+  });
+
+  it("returns null when IMG_BUCKET is missing", async () => {
+    const env = testEnv({ IMG_BUCKET: undefined });
     const id = await putImage(env, OWNER, base64ToBytes(PNG_1X1), {
       mime: "image/png",
       name: "image_0.png",
     });
-    const key = `img:${id}`;
-    const row = await env.OAUTH_KV.get(key, "arrayBuffer");
-    await env.OAUTH_KV.put(key, row!, { expiration: 1, metadata: { owner: OWNER } });
-    await expect(getImage(env, OWNER, id!, "image")).rejects.toThrow(
-      /not found or has expired/,
-    );
-  });
-
-  it("records a 24h TTL on put", async () => {
-    const env = testEnv();
-    const spy = vi.spyOn(env.OAUTH_KV, "put");
-    await putImage(env, OWNER, base64ToBytes(PNG_1X1), {
-      mime: "image/png",
-      name: "image_0.png",
-    });
-    expect(spy).toHaveBeenCalledWith(
-      expect.stringMatching(/^img:img_[a-f0-9]{32}$/),
-      expect.any(ArrayBuffer),
-      expect.objectContaining({ expirationTtl: ARTIFACT_TTL_SECONDS }),
-    );
-    spy.mockRestore();
+    expect(id).toBeNull();
   });
 
   it("skips persist when the object exceeds the KV-safe cap", async () => {

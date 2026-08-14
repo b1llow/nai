@@ -28,9 +28,12 @@ export const MAX_MCP_BODY_BYTES = 20 * 1024 * 1024;
 export const MAX_AUTHORIZE_BODY_BYTES = 64 * 1024;
 export const OAUTH_CONSENT_TTL_SECONDS = 600;
 export const MAX_BINARY_RESPONSE_BYTES = 32 * 1024 * 1024;
-/** KV value cap is 25 MiB; stay under it so image_id persist can fail open. */
+/** Size gate for stored image/vibe artifacts. Persist fails open above this. */
 export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
+/** Vibe tokens / vibe cache in KV. Image artifacts in R2 do not expire. */
 export const ARTIFACT_TTL_SECONDS = 24 * 60 * 60;
+export const PUBLIC_IMAGE_CACHE_CONTROL = "public, max-age=31536000, immutable";
+export const PUBLIC_WEBP_QUALITY = 99;
 export const MAX_IMAGE_INPUT_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_PROMPT_CHARS = 8_000;
 export const MAX_IMAGE_SAMPLES = 4;
@@ -42,6 +45,8 @@ export const MCP_CUSTOM_DOMAIN = "nai.hoshinoaya.com";
 export const MCP_PATH = "/mcp";
 export const MCP_RESOURCE = `https://${MCP_CUSTOM_DOMAIN}${MCP_PATH}`;
 export const MCP_ISSUER = `https://${MCP_CUSTOM_DOMAIN}`;
+/** wrangler dev with a custom-domain route rewrites Host to MCP_CUSTOM_DOMAIN. */
+export const LOCAL_DEV_ORIGIN = "http://127.0.0.1:8787";
 
 /** Hostnames this Worker serves `/mcp` on. Unknown hosts stay bound to `MCP_RESOURCE`. */
 export function isAllowedMcpHostname(hostname: string): boolean {
@@ -69,6 +74,68 @@ export function mcpResourceFromRequest(request: Request): string {
     /* ignore */
   }
   return MCP_RESOURCE;
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
+}
+
+/**
+ * wrangler/miniflare omit CF-Connecting-IP or set it to loopback.
+ * Production always sets the real client IP and clients cannot spoof it.
+ */
+function isLocalWranglerClient(request: Request): boolean {
+  const ip =
+    request.headers.get("cf-connecting-ip") ||
+    request.headers.get("x-real-ip");
+  return !ip || isLoopbackHostname(ip);
+}
+
+/**
+ * Public image URL origin. Unknown hosts stay pinned to {@link MCP_ISSUER}.
+ * Prefers a loopback `Host` header so `wrangler dev` (which may rewrite
+ * `request.url` to the custom domain) still emits fetchable local URLs.
+ * `http://` + the custom domain rewrites to {@link LOCAL_DEV_ORIGIN} only
+ * for loopback clients — production HTTP keeps {@link MCP_ISSUER}.
+ */
+export function mcpOriginFromRequest(request: Request): string {
+  const candidates: string[] = [];
+  try {
+    candidates.push(new URL(request.url).origin);
+  } catch {
+    /* ignore */
+  }
+  const host = request.headers.get("Host");
+  if (host) {
+    try {
+      const proto = new URL(request.url).protocol;
+      candidates.push(new URL(`${proto}//${host}`).origin);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let fallback: string | null = null;
+  for (const origin of candidates) {
+    try {
+      const url = new URL(origin);
+      if (!isAllowedMcpHostname(url.hostname)) continue;
+      if (isLoopbackHostname(url.hostname)) return url.origin;
+      if (url.protocol === "http:" && url.hostname === MCP_CUSTOM_DOMAIN) {
+        return isLocalWranglerClient(request) ? LOCAL_DEV_ORIGIN : MCP_ISSUER;
+      }
+      fallback ??= url.origin;
+    } catch {
+      /* ignore */
+    }
+  }
+  return fallback ?? MCP_ISSUER;
 }
 
 export type NaiHostKind = "text" | "image" | "api";

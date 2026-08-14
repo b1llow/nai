@@ -1,12 +1,12 @@
-import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { Client, InMemoryTransport, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_WIDGET_RENDER_TOOL, IMAGE_WIDGET_URI } from "../src/mcp/image-widget";
-import { createNaiMcpServer } from "../src/mcp/server";
+import { createNaiMcpServer, handleMcp } from "../src/mcp/server";
 import { collectPreviewImageIds } from "../src/mcp/tools";
 import { base64ToBytes } from "../src/nai/binary";
 import { HttpError } from "../src/errors";
-import { testEnv } from "./helpers";
+import { testEnv, testExecutionContext } from "./helpers";
 
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -70,13 +70,18 @@ describe("MCP image_id flow", () => {
       });
       const gen = generated.structuredContent as {
         image_id: string;
-        images: Array<{ filename: string }>;
+        image_url: string;
+        images: Array<{ filename: string; url: string }>;
         files?: unknown;
       };
       expect(generated.isError).not.toBe(true);
       expect(gen.files).toBeUndefined();
       expect(gen.image_id).toMatch(/^img_[a-f0-9]{32}$/);
+      expect(gen.image_url).toBe(
+        `https://nai.hoshinoaya.com/i/${gen.image_id}.webp`,
+      );
       expect(gen.images[0]?.filename).toBe("image_0.png");
+      expect(gen.images[0]?.url).toBe(gen.image_url);
       expect(generated._meta?.["openai/outputTemplate"]).toBeUndefined();
       expect(generated._meta?.mcp_tool_result).toBeUndefined();
 
@@ -115,8 +120,12 @@ describe("MCP image_id flow", () => {
         arguments: { image_id: gen.image_id },
       });
       expect(reloaded.isError).not.toBe(true);
-      const got = reloaded.structuredContent as { image_id: string };
+      const got = reloaded.structuredContent as {
+        image_id: string;
+        image_url: string;
+      };
       expect(got.image_id).toBe(gen.image_id);
+      expect(got.image_url).toBe(gen.image_url);
 
       const resource = await client.readResource({
         uri: `nai://image/${gen.image_id}`,
@@ -340,14 +349,7 @@ describe("MCP image_id flow", () => {
       },
     );
 
-    const env = testEnv();
-    const origPut = env.OAUTH_KV.put.bind(env.OAUTH_KV);
-    env.OAUTH_KV.put = (async (key, value, opts) => {
-      if (String(key).startsWith("img:")) {
-        throw new Error("kv write failed");
-      }
-      return origPut(key, value, opts);
-    }) as typeof env.OAUTH_KV.put;
+    const env = testEnv({ IMG_BUCKET: undefined });
 
     const { client, server } = await connectedClient(env);
     try {
@@ -395,6 +397,55 @@ describe("MCP image_id flow", () => {
     }
   });
 
+  it("handleMcp publishes image_url on the request origin", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/ai/generate-image") && !url.includes("suggest")) {
+          return new Response(pngZip(), {
+            headers: { "content-type": "application/zip" },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+
+    const env = testEnv();
+    const ctx = testExecutionContext();
+    const transport = new StreamableHTTPClientTransport(
+      new URL("http://127.0.0.1:8787/mcp"),
+      {
+        requestInit: {
+          headers: {
+            Authorization: AUTH,
+            Host: "127.0.0.1:8787",
+          },
+        },
+        fetch: (input, init) => {
+          const headers = new Headers(init?.headers);
+          if (!headers.has("Host")) headers.set("Host", "127.0.0.1:8787");
+          return handleMcp(new Request(input, { ...init, headers }), env, ctx);
+        },
+      },
+    );
+    const client = new Client({ name: "origin-flow-test", version: "0.0.1" });
+    await client.connect(transport);
+    try {
+      const generated = await client.callTool({
+        name: "nai_generate_image",
+        arguments: { prompt: "1girl", seed: 1 },
+      });
+      expect(generated.isError).not.toBe(true);
+      const gen = generated.structuredContent as { image_url: string };
+      expect(gen.image_url).toMatch(
+        /^http:\/\/127\.0\.0\.1:8787\/i\/img_[a-f0-9]{32}\.webp$/,
+      );
+    } finally {
+      await client.close();
+    }
+  });
+
   it("returns resource-not-found for a missing image_id", async () => {
     const { client, server } = await connectedClient();
     try {
@@ -404,7 +455,7 @@ describe("MCP image_id flow", () => {
         throw new Error("expected readResource to fail");
       } catch (err) {
         expect(err).toBeInstanceOf(Error);
-        expect((err as Error).message).toMatch(/not found or has expired/);
+        expect((err as Error).message).toMatch(/not found/);
         expect((err as { code?: number }).code).not.toBe(-32603);
       }
     } finally {

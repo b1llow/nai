@@ -34,43 +34,48 @@ describe("withImages", () => {
       width: 832,
       height: 1216,
     };
-    const out = await withImages({ env, owner: "nai-testowner" }, extra, [
-      { name: "image_0.png", bytes, base64: PNG_1X1, mimeType: "image/png" },
-    ]);
+    const out = await withImages(
+      { env, owner: "nai-testowner", origin: "https://nai.hoshinoaya.com" },
+      extra,
+      [{ name: "image_0.png", bytes, base64: PNG_1X1, mimeType: "image/png" }],
+    );
 
     const structured = out.structuredContent as {
       image_id: string;
+      image_url: string;
       images: Array<{
         image_id: string;
         filename: string;
         resource_uri: string;
+        url: string;
+        mime_type: string;
       }>;
       files?: unknown;
     };
     expect(structured.files).toBeUndefined();
     expect(structured.image_id).toMatch(/^img_[a-f0-9]{32}$/);
+    expect(structured.image_url).toBe(
+      `https://nai.hoshinoaya.com/i/${structured.image_id}.webp`,
+    );
     expect(structured.images).toHaveLength(1);
     expect(structured.images[0]?.filename).toBe("image_0.png");
     expect(structured.images[0]?.resource_uri).toBe(
       `nai://image/${structured.image_id}`,
     );
     expect(structured.images[0]?.image_id).toBe(structured.image_id);
+    expect(structured.images[0]?.url).toBe(structured.image_url);
+    expect(structured.images[0]?.mime_type).toBe("image/webp");
 
     expect(out.content[0]).toEqual({
       type: "text",
       text: JSON.stringify(out.structuredContent, null, 2),
     });
-    expect(out.content[1]).toMatchObject({
-      type: "image",
-      data: PNG_1X1,
-      mimeType: "image/png",
-      annotations: { audience: ["user"] },
-    });
-    expect(out.content[2]).toEqual({
+    expect(out.content.some((block) => block.type === "image")).toBe(false);
+    expect(out.content[1]).toEqual({
       type: "resource_link",
-      uri: structured.images[0]?.resource_uri,
-      name: "image_0.png",
-      mimeType: "image/png",
+      uri: structured.image_url,
+      name: `${structured.image_id}.webp`,
+      mimeType: "image/webp",
     });
     expect(out._meta?.mcp_tool_result).toBeUndefined();
     expect(out._meta?.["openai/outputTemplate"]).toBeUndefined();
@@ -108,24 +113,56 @@ describe("withImages", () => {
 
   it("does not advertise a base64 fallback when the image cannot be stored", async () => {
     const env = testEnv();
-    const out = await withImages({ env, owner: "nai-testowner" }, { seed: 1 }, [
-      { name: "image_0.png", bytes: new Uint8Array(0), base64: "" },
-    ]);
+    const out = await withImages(
+      { env, owner: "nai-testowner", origin: "https://nai.hoshinoaya.com" },
+      { seed: 1 },
+      [{ name: "image_0.png", bytes: new Uint8Array(0), base64: "" }],
+    );
     const images = (out.structuredContent as { images: Array<{ skipped?: string }> })
       .images;
     expect(images[0]?.skipped).toMatch(/cannot be passed to later image tools/);
     expect(images[0]?.skipped).not.toMatch(/pass PNG base64/);
   });
 
-  it("binds the preview widget when persist fails so ChatGPT can still mount", async () => {
+  it("falls back to ImageContent when the public rendition cannot be written", async () => {
     const env = testEnv();
-    env.OAUTH_KV.put = (async () => {
-      throw new Error("kv write failed");
-    }) as typeof env.OAUTH_KV.put;
+    const bucket = env.IMG_BUCKET!;
+    const origPut = bucket.put.bind(bucket);
+    bucket.put = (async (key, value, opts) => {
+      if (String(key).startsWith("i/")) throw new Error("r2 public put failed");
+      return origPut(key, value, opts);
+    }) as typeof bucket.put;
+
+    const out = await withImages(
+      { env, owner: "nai-testowner", origin: "https://nai.hoshinoaya.com" },
+      { seed: 1 },
+      [{ name: "image_0.png", bytes: base64ToBytes(PNG_1X1), base64: PNG_1X1 }],
+    );
+    const structured = out.structuredContent as {
+      image_id: string;
+      image_url?: string;
+    };
+    expect(structured.image_id).toMatch(/^img_[a-f0-9]{32}$/);
+    expect(structured.image_url).toBeUndefined();
+    expect(out.content).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "image",
+          data: PNG_1X1,
+          mimeType: "image/png",
+        }),
+      ]),
+    );
+  });
+
+  it("binds the preview widget when persist fails so ChatGPT can still mount", async () => {
+    const env = testEnv({ IMG_BUCKET: undefined });
     const bytes = base64ToBytes(PNG_1X1);
-    const out = await withImages({ env, owner: "nai-testowner" }, { seed: 1 }, [
-      { name: "image_0.png", bytes, base64: PNG_1X1, mimeType: "image/png" },
-    ]);
+    const out = await withImages(
+      { env, owner: "nai-testowner", origin: "https://nai.hoshinoaya.com" },
+      { seed: 1 },
+      [{ name: "image_0.png", bytes, base64: PNG_1X1, mimeType: "image/png" }],
+    );
     expect(out.structuredContent).toMatchObject({ image_id: null });
     expect(out._meta).toMatchObject({
       ui: { resourceUri: IMAGE_WIDGET_URI },
@@ -146,5 +183,19 @@ describe("withImages", () => {
         }),
       ]),
     );
+  });
+
+  it("publishes a PNG URL when the Images binding is missing", async () => {
+    const env = testEnv({ IMAGES: undefined });
+    const out = await withImages(
+      { env, owner: "nai-testowner", origin: "https://nai.hoshinoaya.com" },
+      { seed: 1 },
+      [{ name: "image_0.png", bytes: base64ToBytes(PNG_1X1), base64: PNG_1X1 }],
+    );
+    const structured = out.structuredContent as { image_url: string };
+    expect(structured.image_url).toMatch(
+      /^https:\/\/nai\.hoshinoaya\.com\/i\/img_[a-f0-9]{32}\.png$/,
+    );
+    expect(out.content.some((block) => block.type === "image")).toBe(false);
   });
 });

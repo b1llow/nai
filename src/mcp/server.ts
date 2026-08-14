@@ -6,8 +6,10 @@ import { unhandledToResponse } from "../errors";
 import {
   MAX_MCP_BODY_BYTES,
   MCP_CUSTOM_DOMAIN,
+  MCP_ISSUER,
   MCP_PATH,
   isAllowedMcpHostname,
+  mcpOriginFromRequest,
 } from "../limits";
 import { resolveMcpToolAuth } from "../oauth/props";
 import { enforceIpRateLimit } from "../ratelimit";
@@ -17,12 +19,16 @@ import { registerNaiTools } from "./tools";
 export const MCP_SERVER_INSTRUCTIONS =
   `After nai_generate_image, nai_upscale, or nai_director returns an image_id, call ${IMAGE_WIDGET_RENDER_TOOL} with that image_id (or image_ids) so ChatGPT mounts the image preview UI. If image_id is null, that result already binds the preview — do not call ${IMAGE_WIDGET_RENDER_TOOL}. Do not open ui:// URIs. nai_get_image only reloads bytes.`;
 
-export function createNaiMcpServer(env: Env, auth: string | null): McpServer {
+export function createNaiMcpServer(
+  env: Env,
+  auth: string | null,
+  origin: string = MCP_ISSUER,
+): McpServer {
   const server = new McpServer(
     { name: "novelai", version: "1.0.0" },
     { instructions: MCP_SERVER_INSTRUCTIONS },
   );
-  registerNaiTools(server, env, auth);
+  registerNaiTools(server, env, auth, origin);
   return server;
 }
 
@@ -54,7 +60,8 @@ export async function handleMcp(
       inbound.headers.get("Authorization") ?? undefined,
     );
 
-    const response = await createMcpHandler(() => createNaiMcpServer(env, auth), {
+    const origin = mcpOriginFromRequest(inbound);
+    const response = await createMcpHandler(() => createNaiMcpServer(env, auth, origin), {
       route: MCP_PATH,
       allowedHostnames: mcpAllowedHostnames(inbound),
       corsOptions: {

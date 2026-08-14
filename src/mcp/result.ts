@@ -5,6 +5,7 @@ import { bytesToBase64, pngSize } from "../nai/binary";
 import { imageResourceUri } from "../nai/image-input";
 import { putImage } from "./artifacts";
 import { IMAGE_WIDGET_URI } from "./image-widget";
+import { publishImage } from "./public-image";
 
 export type McpText = { type: "text"; text: string };
 export type McpImage = {
@@ -67,6 +68,7 @@ export type StoredImageMeta = {
   width?: number;
   height?: number;
   resource_uri?: string;
+  url?: string;
   skipped?: string;
 };
 
@@ -131,7 +133,7 @@ export function mcpError(err: unknown): McpToolResult {
 }
 
 export async function withImages(
-  ctx: { env: Env; owner: string },
+  ctx: { env: Env; owner: string; origin: string },
   extra: Record<string, unknown>,
   images: ImageBlob[],
 ): Promise<McpToolResult> {
@@ -150,11 +152,14 @@ export async function withImages(
       height,
       name: img.name,
     });
+    const published = imageId
+      ? await publishImage(ctx.env, ctx.origin, imageId, img.bytes)
+      : null;
 
     const meta: StoredImageMeta = {
       image_id: imageId,
       filename: img.name,
-      mime_type: mime,
+      mime_type: published?.mime ?? mime,
       width,
       height,
     };
@@ -164,21 +169,31 @@ export async function withImages(
       meta.skipped =
         "too large to store as image_id; this output cannot be passed to later image tools";
     }
+    if (published) meta.url = published.url;
     stored.push(meta);
 
-    content.push({
-      type: "image",
-      data: base64,
-      mimeType: mime,
-      annotations: { audience: ["user"] },
-    });
-    if (imageId) {
+    if (published) {
       content.push({
         type: "resource_link",
-        uri: meta.resource_uri!,
-        name: img.name,
-        mimeType: mime,
+        uri: published.url,
+        name: published.filename,
+        mimeType: published.mime,
       });
+    } else {
+      content.push({
+        type: "image",
+        data: base64,
+        mimeType: mime,
+        annotations: { audience: ["user"] },
+      });
+      if (imageId) {
+        content.push({
+          type: "resource_link",
+          uri: meta.resource_uri!,
+          name: img.name,
+          mimeType: mime,
+        });
+      }
     }
   }
 
@@ -187,6 +202,7 @@ export async function withImages(
     image_id: stored[0]?.image_id ?? null,
     images: stored,
   };
+  if (stored[0]?.url) structuredContent.image_url = stored[0].url;
   content.unshift({
     type: "text",
     text: JSON.stringify(structuredContent, null, 2),
