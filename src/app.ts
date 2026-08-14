@@ -100,7 +100,7 @@ app.get("/", (c) =>
 
 app.get("/health", (c) => {
   c.header("Cache-Control", "no-store");
-  return c.json(healthPayload(c.env));
+  return c.json(healthPayload());
 });
 
 app.get("/v1/models", listModels);

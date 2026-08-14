@@ -17,18 +17,6 @@ describe("worker fetch routing", () => {
     expect(await res.json()).toEqual({ ok: true, revision: null });
   });
 
-  it("exposes GIT_SHA on /health as revision", async () => {
-    const res = await worker.fetch(
-      new Request("https://nai.hoshinoaya.com/health"),
-      testEnv({ GIT_SHA: "364de92a1bc5a46bacd9ad29791cbb0e4b85ffbd" }),
-      ctx,
-    );
-    expect(await res.json()).toEqual({
-      ok: true,
-      revision: "364de92a1bc5a46bacd9ad29791cbb0e4b85ffbd",
-    });
-  });
-
   it("lists /mcp on the root info document", async () => {
     const res = await worker.fetch(
       new Request("https://nai.hoshinoaya.com/"),
