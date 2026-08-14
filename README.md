@@ -108,6 +108,7 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_upscale` | `api.novelai.net` `/ai/upscale`. Accepts `image_id` or PNG base64. |
 | `nai_director` | `image.novelai.net` `/ai/augment-image`. Accepts `image_id` or PNG base64. |
 | `nai_get_image` | Reload a stored PNG by `image_id` (for hosts that cannot `resources/read`) |
+| `nai_render_image_preview` | ChatGPT / MCP Apps render tool. Pass `image_id` from a previous image tool to mount `ui://novelai/image-preview-v2.html`. |
 | `nai_suggest_tags` | `/ai/generate-image/suggest-tags` |
 | `nai_encode_vibe` | `/ai/encode-vibe`. Returns `vibe_id` (token stays server-side; repeats are cached). |
 | `nai_chat` | existing OpenAI-compatible chat proxy |
@@ -121,11 +122,11 @@ Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://cat
 
 Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
 
-Image tools return MCP `image` content (PNG) for the current client UI **and** an `image_id` / `nai://image/...` handle for later tool calls. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, or img2img — not a filename such as `image_0.png`, and not the PNG base64. Artifacts are stored in Workers KV for 24 hours, scoped to the NovelAI token. KV is eventually consistent across PoPs; if an `image_id` miss happens, retry, regenerate, or pass PNG base64.
+Image tools return MCP `image` content (PNG) for the current client UI **and** an `image_id` / `nai://image/...` handle for later tool calls. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, `nai_render_image_preview`, or img2img — not a filename such as `image_0.png`, and not the PNG base64. Artifacts are stored in Workers KV for 24 hours, scoped to the NovelAI token. KV is eventually consistent across PoPs; if an `image_id` miss happens, retry, regenerate, or pass PNG base64.
 
 V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
 
-`nai_generate_image`, `nai_upscale`, `nai_director`, and `nai_get_image` advertise `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. ChatGPT also receives the same envelope on tool-result `_meta.mcp_tool_result` / `call_tool_result` (widget-only; the model still sees `structuredContent` without PNG bytes). The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin). The widget renders those image blocks as data URLs and shows tool errors instead of a false “image was hidden” status. It does not fetch remote URLs.
+Only `nai_render_image_preview` advertises `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget (OpenAI’s decoupled data/render pattern). Generate / upscale / director / get-image are data tools: they return `image_id` and PNG bytes and do not bind the template. After those tools succeed, the model should call `nai_render_image_preview` with the `image_id` — hosts cannot open `ui://` URIs, and `_meta` on a data-tool result is not model-visible. The render tool also copies the template URI onto the tool-result `_meta` plus `mcp_tool_result` / `call_tool_result` so ChatGPT can mount the iframe. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin). The widget renders those image blocks as data URLs and shows tool errors instead of a false “image was hidden” status. It does not fetch remote URLs.
 
 Tool `ImageContent` can appear in the host's tool-result UI. That is a different channel from the final assistant message; this server cannot promote a tool image into the chat bubble. There is no public HTTPS image CDN.
 

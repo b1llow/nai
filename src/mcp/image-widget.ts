@@ -4,9 +4,22 @@ import { MCP_ISSUER } from "../limits";
 export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v2.html";
 export const IMAGE_WIDGET_MIME_TYPE = "text/html;profile=mcp-app";
 export const IMAGE_WIDGET_PROTOCOL_VERSION = "2026-01-26";
+export const IMAGE_WIDGET_RENDER_TOOL = "nai_render_image_preview";
 /** Unique origin ChatGPT uses to sandbox this template (required for app submission). */
 export const IMAGE_WIDGET_DOMAIN = MCP_ISSUER;
 
+/** Status text only — data tools must not bind the widget template. */
+export function imageToolStatusMeta(
+  invoking: string,
+  invoked: string,
+): Record<string, unknown> {
+  return {
+    "openai/toolInvocation/invoking": invoking,
+    "openai/toolInvocation/invoked": invoked,
+  };
+}
+
+/** Bind the preview template. Use only on the render tool. */
 export function imageWidgetToolMeta(
   invoking: string,
   invoked: string,
@@ -14,6 +27,7 @@ export function imageWidgetToolMeta(
   return {
     ui: { resourceUri: IMAGE_WIDGET_URI },
     "openai/outputTemplate": IMAGE_WIDGET_URI,
+    "openai/widgetAccessible": true,
     "openai/toolInvocation/invoking": invoking,
     "openai/toolInvocation/invoked": invoked,
   };

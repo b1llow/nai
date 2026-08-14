@@ -11,13 +11,17 @@ import {
 } from "../limits";
 import { resolveMcpToolAuth } from "../oauth/props";
 import { enforceIpRateLimit } from "../ratelimit";
+import { IMAGE_WIDGET_RENDER_TOOL } from "./image-widget";
 import { registerNaiTools } from "./tools";
 
+export const MCP_SERVER_INSTRUCTIONS =
+  `After nai_generate_image, nai_upscale, or nai_director returns an image_id, call ${IMAGE_WIDGET_RENDER_TOOL} with that image_id (or image_ids) so ChatGPT mounts the image preview UI. If image_id is null, that result already binds the preview — do not call ${IMAGE_WIDGET_RENDER_TOOL}. Do not open ui:// URIs. nai_get_image only reloads bytes.`;
+
 export function createNaiMcpServer(env: Env, auth: string | null): McpServer {
-  const server = new McpServer({
-    name: "novelai",
-    version: "1.0.0",
-  });
+  const server = new McpServer(
+    { name: "novelai", version: "1.0.0" },
+    { instructions: MCP_SERVER_INSTRUCTIONS },
+  );
   registerNaiTools(server, env, auth);
   return server;
 }
