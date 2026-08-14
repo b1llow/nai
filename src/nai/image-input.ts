@@ -13,6 +13,39 @@ export type DecodedImage = {
   isPng: boolean;
 };
 
+const IMAGE_ID_RE = /^img_[a-f0-9]{32}$/i;
+const VIBE_ID_RE = /^vibe_[a-f0-9]{32}$/i;
+const IMAGE_URI_RE = /^nai:\/\/image\/(img_[a-f0-9]{32})$/i;
+const VIBE_URI_RE = /^nai:\/\/vibe\/(vibe_[a-f0-9]{32})$/i;
+
+/** Normalize `img_<32 hex>` or `nai://image/img_<32 hex>` to a lowercase id. */
+export function parseImageId(raw: string): string | null {
+  const t = raw.trim();
+  if (IMAGE_ID_RE.test(t)) return t.toLowerCase();
+  const uri = IMAGE_URI_RE.exec(t);
+  return uri ? uri[1]!.toLowerCase() : null;
+}
+
+/** Normalize `vibe_<32 hex>` or `nai://vibe/vibe_<32 hex>` to a lowercase id. */
+export function parseVibeId(raw: string): string | null {
+  const t = raw.trim();
+  if (VIBE_ID_RE.test(t)) return t.toLowerCase();
+  const uri = VIBE_URI_RE.exec(t);
+  return uri ? uri[1]!.toLowerCase() : null;
+}
+
+export function isImageRef(raw: string): boolean {
+  return parseImageId(raw) !== null;
+}
+
+export function isVibeRef(raw: string): boolean {
+  return parseVibeId(raw) !== null;
+}
+
+export function imageResourceUri(id: string): string {
+  return `nai://image/${id}`;
+}
+
 export function decodeUserImage(raw: string, param = "image"): DecodedImage {
   if (typeof raw !== "string" || !raw.trim()) {
     throw openaiError(400, `${param} is required`, {

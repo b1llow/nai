@@ -77,10 +77,14 @@ describe("MCP tools/list schemas", () => {
       expect(values).toContain("normal_portrait");
       expect(values).not.toContain("1024x1024");
       expect(values).not.toContain("portrait");
-      expect(generate?.outputSchema?.properties).toMatchObject({
-        seed: { type: "number" },
-        files: { type: "array" },
-      });
+      expect(generate?.outputSchema?.properties).toHaveProperty("image_id");
+      expect(generate?.outputSchema?.properties).toHaveProperty("images");
+      expect(generate?.outputSchema?.properties).toHaveProperty("seed");
+      expect(generate?.outputSchema?.properties).not.toHaveProperty("files");
+
+      const getImage = tools.find((t) => t.name === "nai_get_image");
+      expect(getImage).toBeDefined();
+      expect(getImage?.outputSchema?.properties).toHaveProperty("image_id");
     } finally {
       await client.close();
       await server.close();

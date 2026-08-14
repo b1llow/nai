@@ -28,6 +28,9 @@ export const MAX_MCP_BODY_BYTES = 20 * 1024 * 1024;
 export const MAX_AUTHORIZE_BODY_BYTES = 64 * 1024;
 export const OAUTH_CONSENT_TTL_SECONDS = 600;
 export const MAX_BINARY_RESPONSE_BYTES = 32 * 1024 * 1024;
+/** KV value cap is 25 MiB; stay under it so image_id persist can fail open. */
+export const MAX_ARTIFACT_BYTES = 20 * 1024 * 1024;
+export const ARTIFACT_TTL_SECONDS = 24 * 60 * 60;
 export const MAX_IMAGE_INPUT_BYTES = 8 * 1024 * 1024;
 export const MAX_IMAGE_PROMPT_CHARS = 8_000;
 export const MAX_IMAGE_SAMPLES = 4;
