@@ -180,7 +180,7 @@ const renderImageOutputSchema = z.object({
 const RENDER_AFTER =
   "After success, call nai_render_image_preview with the image_id (or image_ids) so ChatGPT can mount the preview UI. Do not open ui:// URIs.";
 
-function collectPreviewImageIds(args: {
+export function collectPreviewImageIds(args: {
   image_id?: string;
   image_ids?: string[];
 }): string[] {
@@ -190,7 +190,14 @@ function collectPreviewImageIds(args: {
     const id = raw.trim();
     if (id && !ids.includes(id)) ids.push(id);
   }
-  return ids.slice(0, MAX_IMAGE_SAMPLES);
+  if (ids.length > MAX_IMAGE_SAMPLES) {
+    throw openaiError(
+      400,
+      `Pass at most ${MAX_IMAGE_SAMPLES} unique images across image_id and image_ids.`,
+      { type: "invalid_request_error", param: "image_ids" },
+    );
+  }
+  return ids;
 }
 
 const tagsOutputSchema = z.object({
@@ -472,7 +479,9 @@ export function registerNaiTools(
           .min(1)
           .max(MAX_IMAGE_SAMPLES)
           .optional()
-          .describe("Additional image_ids when n_samples > 1 (max 4)."),
+          .describe(
+            `Additional image_ids when n_samples > 1. Combined with image_id, at most ${MAX_IMAGE_SAMPLES} unique ids.`,
+          ),
         model: z.string().optional().describe("Optional caption from the generate result."),
         seed: z.number().optional().describe("Optional caption from the generate result."),
       }),

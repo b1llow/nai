@@ -3,7 +3,9 @@ import { zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMAGE_WIDGET_RENDER_TOOL, IMAGE_WIDGET_URI } from "../src/mcp/image-widget";
 import { createNaiMcpServer } from "../src/mcp/server";
+import { collectPreviewImageIds } from "../src/mcp/tools";
 import { base64ToBytes } from "../src/nai/binary";
+import { HttpError } from "../src/errors";
 import { testEnv } from "./helpers";
 
 const PNG_1X1 =
@@ -284,6 +286,40 @@ describe("MCP image_id flow", () => {
       const text = (encoded.content[0] as { text?: string }).text ?? "";
       expect(text).toMatch(/vibe_id could not be stored/);
       expect(encoded._meta?.mcp_tool_result).toBeUndefined();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects more than four unique preview ids instead of truncating", async () => {
+    const ids = ["aa", "bb", "cc", "dd", "ee"].map((hex) => "img_" + hex.repeat(16));
+    expect(() =>
+      collectPreviewImageIds({ image_id: ids[0], image_ids: ids.slice(1) }),
+    ).toThrow(HttpError);
+    expect(() =>
+      collectPreviewImageIds({ image_id: ids[0], image_ids: ids.slice(1) }),
+    ).toThrow(/at most 4 unique images/);
+    expect(
+      collectPreviewImageIds({
+        image_id: ids[0],
+        image_ids: [ids[0]!, ids[1]!, ids[2]!, ids[3]!],
+      }),
+    ).toEqual(ids.slice(0, 4));
+
+    const { client, server } = await connectedClient();
+    try {
+      const excess = await client.callTool({
+        name: IMAGE_WIDGET_RENDER_TOOL,
+        arguments: { image_id: ids[0], image_ids: ids.slice(1) },
+      });
+      expect(excess.isError).toBe(true);
+      const text = (excess.content[0] as { text?: string }).text ?? "";
+      expect(text).toMatch(/at most 4 unique images/);
+      expect(excess._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+      });
     } finally {
       await client.close();
       await server.close();
