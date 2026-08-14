@@ -170,14 +170,22 @@ describe("GET /i/:file", () => {
     expect(await env.IMG_BUCKET!.head(originalImageKey(IMAGE_ID))).not.toBeNull();
   });
 
-  it("rate-limits public image fetches and skips OPTIONS", async () => {
-    const env = testEnv({
-      API_RATE_LIMIT: { limit: async () => ({ success: false }) },
-    });
+  it("rate-limits public image fetches on IMAGE_RATE_LIMIT, not API_RATE_LIMIT", async () => {
+    const apiDenied = await app.request(
+      `/i/${IMAGE_ID}.webp`,
+      { headers: { "cf-connecting-ip": "203.0.113.9" } },
+      testEnv({
+        API_RATE_LIMIT: { limit: async () => ({ success: false }) },
+      }),
+    );
+    expect(apiDenied.status).toBe(404);
+
     const denied = await app.request(
       `/i/${IMAGE_ID}.webp`,
       { headers: { "cf-connecting-ip": "203.0.113.9" } },
-      env,
+      testEnv({
+        IMAGE_RATE_LIMIT: { limit: async () => ({ success: false }) },
+      }),
     );
     expect(denied.status).toBe(429);
     expect(denied.headers.get("Retry-After")).toBe("60");
@@ -194,7 +202,7 @@ describe("GET /i/:file", () => {
       },
       {
         ...testEnv(),
-        API_RATE_LIMIT: {
+        IMAGE_RATE_LIMIT: {
           limit: async () => {
             called += 1;
             return { success: false };

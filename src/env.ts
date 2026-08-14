@@ -14,7 +14,8 @@ import { isAllowedNaiHost, type NaiHostKind } from "./limits";
 type RateLimitBinding =
   | "API_RATE_LIMIT"
   | "OAUTH_AUTHORIZE_RATE_LIMIT"
-  | "OAUTH_REGISTER_RATE_LIMIT";
+  | "OAUTH_REGISTER_RATE_LIMIT"
+  | "IMAGE_RATE_LIMIT";
 
 type OptionalBinding = RateLimitBinding | "IMG_BUCKET" | "IMAGES";
 
@@ -23,6 +24,7 @@ export type Env = Omit<Cloudflare.Env, OptionalBinding> & {
   API_RATE_LIMIT?: RateLimit;
   OAUTH_AUTHORIZE_RATE_LIMIT?: RateLimit;
   OAUTH_REGISTER_RATE_LIMIT?: RateLimit;
+  IMAGE_RATE_LIMIT?: RateLimit;
   OAUTH_PROVIDER?: OAuthHelpers;
   /** Image bytes (original PNG + public WebP). Missing in tests that opt out. */
   IMG_BUCKET?: R2Bucket;

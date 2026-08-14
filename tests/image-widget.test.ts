@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   IMAGE_WIDGET_HTML,
   IMAGE_WIDGET_PROTOCOL_VERSION,
+  imageWidgetHtml,
 } from "../src/mcp/image-widget";
 
 const PNG_1X1 =
@@ -9,13 +10,13 @@ const PNG_1X1 =
 
 type HostMessage = Record<string, unknown>;
 
-function widgetScript(): string {
-  const script = IMAGE_WIDGET_HTML.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+function widgetScript(html: string): string {
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
   if (!script) throw new Error("widget HTML is missing a script");
   return script;
 }
 
-function mountWidget(openai?: Record<string, unknown>) {
+function mountWidget(openai?: Record<string, unknown>, html = IMAGE_WIDGET_HTML) {
   const posted: HostMessage[] = [];
   const listeners = new Map<string, Array<(event: unknown) => void>>();
   const parent = {
@@ -72,7 +73,7 @@ function mountWidget(openai?: Record<string, unknown>) {
 
   vi.stubGlobal("window", windowObj);
   vi.stubGlobal("document", document);
-  new Function(widgetScript())();
+  new Function(widgetScript(html))();
 
   function emit(type: string, event: unknown) {
     for (const fn of listeners.get(type) ?? []) fn(event);
@@ -204,6 +205,8 @@ describe("image preview widget", () => {
             { url: "javascript:alert(1)" },
             { url: "https://nai.hoshinoaya.com/authorize" },
             { url: "https://user:pass@nai.hoshinoaya.com/i/" + id + ".webp" },
+            { url: "https://attacker.workers.dev/i/" + id + ".webp" },
+            { url: "http://127.0.0.1:8787/i/" + id + ".webp" },
           ],
         },
         content: [],
@@ -211,6 +214,29 @@ describe("image preview widget", () => {
     });
     expect(gallery.nodes).toHaveLength(0);
     expect(status.textContent).toMatch(/did not expose/);
+  });
+
+  it("only allows image URLs on the origins injected into that widget copy", () => {
+    const preview = "https://nai.example.workers.dev";
+    const { hostMessage, gallery } = mountWidget(undefined, imageWidgetHtml(preview));
+    const id = "img_" + "ab".repeat(16);
+    const allowed = `${preview}/i/${id}.webp`;
+    hostMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: {
+        structuredContent: {
+          images: [
+            { url: allowed },
+            { url: `https://attacker.workers.dev/i/${id}.webp` },
+            { url: `http://127.0.0.1:8787/i/${id}.webp` },
+          ],
+        },
+        content: [],
+      },
+    });
+    expect(gallery.nodes).toHaveLength(1);
+    expect(gallery.nodes[0]?.src).toBe(allowed);
   });
 
   it("renders leftover base64 images alongside allowlisted URLs", () => {

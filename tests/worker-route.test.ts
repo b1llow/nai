@@ -49,5 +49,14 @@ describe("worker fetch routing", () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("image/webp");
+
+    const head = await worker.fetch(
+      new Request(`https://nai.hoshinoaya.com/i/${id}.webp`, { method: "HEAD" }),
+      env,
+      ctx,
+    );
+    expect(head.status).toBe(200);
+    expect(head.headers.get("Content-Type")).toBe("image/webp");
+    expect(await head.arrayBuffer()).toEqual(new ArrayBuffer(0));
   });
 });

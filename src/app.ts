@@ -107,7 +107,11 @@ app.get("/health", (c) => {
 
 app.use("/i/*", async (c, next) => {
   if (c.req.method === "OPTIONS") return next();
-  await enforceIpRateLimit(c.env, c.req.raw);
+  // Pass the binding only when present. `enforceIpRateLimit(undefined)` would
+  // fall back to API_RATE_LIMIT because undefined triggers the default arg.
+  if (c.env.IMAGE_RATE_LIMIT) {
+    await enforceIpRateLimit(c.env, c.req.raw, c.env.IMAGE_RATE_LIMIT);
+  }
   await next();
 });
 

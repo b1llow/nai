@@ -150,9 +150,46 @@ describe("MCP tools/list schemas", () => {
       expect(html).toContain("urlImages");
       expect(html).toContain("isAllowedImageUrl");
       expect(html).toContain("image_url");
+      expect(html).toContain('new Set(["https://nai.hoshinoaya.com"])');
+      expect(html).not.toContain("__NAI_ALLOWED_ORIGINS__");
+      expect(html).not.toContain('endsWith(".workers.dev")');
       const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
       expect(script).toBeDefined();
       expect(() => new Function(script!)).not.toThrow();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("injects the MCP request origin into the widget HTML allowlist", async () => {
+    const origin = "https://nai.example.workers.dev";
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    const server = createNaiMcpServer(testEnv(), "Bearer header-token-xx", origin);
+    const client = new Client({ name: "widget-origin-test", version: "0.0.1" });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+    try {
+      const preview = await client.readResource({ uri: IMAGE_WIDGET_URI });
+      const html =
+        preview.contents[0] && "text" in preview.contents[0]
+          ? preview.contents[0].text
+          : "";
+      expect(html).toContain(
+        `new Set(${JSON.stringify([origin, "https://nai.hoshinoaya.com"])})`,
+      );
+      expect(preview.contents[0]).toMatchObject({
+        _meta: {
+          ui: {
+            csp: {
+              resourceDomains: [origin, "https://nai.hoshinoaya.com"],
+            },
+          },
+        },
+      });
     } finally {
       await client.close();
       await server.close();

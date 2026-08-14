@@ -34,6 +34,14 @@
         "limit": 8,
         "period": 60
       }
+    },
+    {
+      "name": "IMAGE_RATE_LIMIT",
+      "namespace_id": "1004",
+      "simple": {
+        "limit": 120,
+        "period": 60
+      }
     }
   ],
   "observability": {

@@ -1,12 +1,26 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 import { MCP_ISSUER } from "../limits";
 
-export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v4.html";
+export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v5.html";
 export const IMAGE_WIDGET_MIME_TYPE = "text/html;profile=mcp-app";
 export const IMAGE_WIDGET_PROTOCOL_VERSION = "2026-01-26";
 export const IMAGE_WIDGET_RENDER_TOOL = "nai_render_image_preview";
 /** Unique origin ChatGPT uses to sandbox this template (required for app submission). */
 export const IMAGE_WIDGET_DOMAIN = MCP_ISSUER;
+
+const ALLOWED_ORIGINS_TOKEN = "__NAI_ALLOWED_ORIGINS__";
+
+/** Same list as widget CSP `resourceDomains` / `resource_domains`. */
+export function widgetResourceDomains(origin: string): string[] {
+  return [...new Set([origin, MCP_ISSUER])];
+}
+
+export function imageWidgetHtml(origin: string = MCP_ISSUER): string {
+  return IMAGE_WIDGET_HTML_TEMPLATE.replaceAll(
+    ALLOWED_ORIGINS_TOKEN,
+    JSON.stringify(widgetResourceDomains(origin)),
+  );
+}
 
 /** Status text only — data tools must not bind the widget template. */
 export function imageToolStatusMeta(
@@ -37,7 +51,7 @@ export function registerImageWidget(
   server: McpServer,
   origin: string = MCP_ISSUER,
 ): void {
-  const resourceDomains = [...new Set([origin, MCP_ISSUER])];
+  const resourceDomains = widgetResourceDomains(origin);
   server.registerResource(
     "image-preview-widget",
     IMAGE_WIDGET_URI,
@@ -51,7 +65,7 @@ export function registerImageWidget(
         {
           uri: IMAGE_WIDGET_URI,
           mimeType: IMAGE_WIDGET_MIME_TYPE,
-          text: IMAGE_WIDGET_HTML,
+          text: imageWidgetHtml(origin),
           _meta: {
             ui: {
               domain: IMAGE_WIDGET_DOMAIN,
@@ -74,7 +88,7 @@ export function registerImageWidget(
   );
 }
 
-export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
+const IMAGE_WIDGET_HTML_TEMPLATE = String.raw`<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -99,6 +113,7 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
       (() => {
         const status = document.getElementById("status");
         const gallery = document.getElementById("gallery");
+        const allowedOrigins = new Set(__NAI_ALLOWED_ORIGINS__);
         const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
         const initializeId = 1;
         let initialized = false;
@@ -134,15 +149,8 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
             const parsed = new URL(value);
             if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
             if (parsed.username || parsed.password) return false;
-            const host = parsed.hostname.toLowerCase();
-            const allowedHost =
-              host === "nai.hoshinoaya.com" ||
-              host === "localhost" ||
-              host === "127.0.0.1" ||
-              host === "::1" ||
-              host === "[::1]" ||
-              host.endsWith(".workers.dev");
-            return allowedHost && /^\/i\/img_[a-f0-9]{32}\.(webp|png)$/i.test(parsed.pathname);
+            if (!allowedOrigins.has(parsed.origin)) return false;
+            return /^\/i\/img_[a-f0-9]{32}\.(webp|png)$/i.test(parsed.pathname);
           } catch {
             return false;
           }
@@ -272,3 +280,5 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
     </script>
   </body>
 </html>`;
+
+export const IMAGE_WIDGET_HTML = imageWidgetHtml();

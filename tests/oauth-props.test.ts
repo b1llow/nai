@@ -179,6 +179,13 @@ describe("mcpOriginFromRequest", () => {
         }),
       ),
     ).toBe(LOCAL_DEV_ORIGIN);
+    expect(
+      mcpOriginFromRequest(
+        new Request("http://nai.hoshinoaya.com/mcp", {
+          headers: { "x-real-ip": "127.0.0.1" },
+        }),
+      ),
+    ).toBe(LOCAL_DEV_ORIGIN);
   });
 
   it("does not treat production HTTP on the custom domain as localhost", () => {

@@ -109,7 +109,7 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_upscale` | `api.novelai.net` `/ai/upscale`. Accepts `image_id` or PNG base64. Returns `image_url` + `image_id`. |
 | `nai_director` | `image.novelai.net` `/ai/augment-image`. Accepts `image_id` or PNG base64. Returns `image_url` + `image_id`. |
 | `nai_get_image` | Reload a stored image by `image_id` (re-publishes the public URL if needed) |
-| `nai_render_image_preview` | ChatGPT / MCP Apps render tool. Pass `image_id` from a previous image tool to mount `ui://novelai/image-preview-v4.html`. |
+| `nai_render_image_preview` | ChatGPT / MCP Apps render tool. Pass `image_id` from a previous image tool to mount `ui://novelai/image-preview-v5.html`. |
 | `nai_suggest_tags` | `/ai/generate-image/suggest-tags` |
 | `nai_encode_vibe` | `/ai/encode-vibe`. Returns `vibe_id` (token stays server-side; repeats are cached). |
 | `nai_chat` | existing OpenAI-compatible chat proxy |
@@ -119,7 +119,7 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_subscription` | `image.novelai.net` `/user/subscription` |
 | `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
 
-Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, `nai://image/{image_id}` (original PNGs for tool chaining; not listed), and `ui://novelai/image-preview-v4.html` (MCP App / ChatGPT output template for inline image preview).
+Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, `nai://image/{image_id}` (original PNGs for tool chaining; not listed), and `ui://novelai/image-preview-v5.html` (MCP App / ChatGPT output template for inline image preview).
 
 Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
 
@@ -127,7 +127,7 @@ Image tools return a public `image_url` (`https://nai.hoshinoaya.com/i/img_<id>.
 
 V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached in KV. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
 
-Only `nai_render_image_preview` advertises `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget (OpenAI’s decoupled data/render pattern). Generate / upscale / director / get-image are data tools: they return `image_url` and `image_id` and do not bind the template. After those tools succeed, the model should call `nai_render_image_preview` with the `image_id` — hosts cannot open `ui://` URIs, and `_meta` on a data-tool result is not model-visible. The render tool also copies the template URI onto the tool-result `_meta` plus `mcp_tool_result` / `call_tool_result` so ChatGPT can mount the iframe. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin), and allows that origin in the widget CSP `resourceDomains` so the preview can load the public URL. The widget prefers `structuredContent.images[].url` on this Worker’s hosts (`/i/img_<id>.webp|png`) and still renders leftover base64 image blocks in the same gallery. It shows tool errors instead of a false “image was hidden” status.
+Only `nai_render_image_preview` advertises `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget (OpenAI’s decoupled data/render pattern). Generate / upscale / director / get-image are data tools: they return `image_url` and `image_id` and do not bind the template. After those tools succeed, the model should call `nai_render_image_preview` with the `image_id` — hosts cannot open `ui://` URIs, and `_meta` on a data-tool result is not model-visible. The render tool also copies the template URI onto the tool-result `_meta` plus `mcp_tool_result` / `call_tool_result` so ChatGPT can mount the iframe. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin), and allows that origin in the widget CSP `resourceDomains` so the preview can load the public URL. The widget prefers `structuredContent.images[].url` on the same origins as its CSP `resourceDomains` (the request origin plus `https://nai.hoshinoaya.com`), path `/i/img_<id>.webp|png`, and still renders leftover base64 image blocks in the same gallery. It shows tool errors instead of a false “image was hidden” status.
 
 Not implemented: login/register, encrypted story objects / keystore, module training, `/ai/classify`, stepwise image streaming.
 
