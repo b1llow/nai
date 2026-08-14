@@ -7,6 +7,10 @@ import type {
  * Redirect URIs accepted for DCR and the consent page.
  * CIMD clients are still fetched by URL; this blocks random DCR phishing
  * clients and unknown authorize redirects.
+ *
+ * Grok does not perform DCR itself: register a public PKCE client once via
+ * POST /oauth/register with the grok.com callback, then paste that client_id
+ * into Grok's Custom Connector form (see README).
  */
 export function isAllowedOAuthRedirect(raw: string): boolean {
   let url: URL;
@@ -43,6 +47,12 @@ export function isAllowedOAuthRedirect(raw: string): boolean {
     return (
       url.pathname === "/api/mcp/auth_callback" ||
       url.pathname === "/api/mcp/auth_callback/"
+    );
+  }
+  if (host === "grok.com" || host === "www.grok.com") {
+    return (
+      url.pathname === "/connectors-oauth-exchange-code" ||
+      url.pathname === "/connectors-oauth-exchange-code/"
     );
   }
   return false;
