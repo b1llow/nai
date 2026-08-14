@@ -157,8 +157,11 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
           return unwrapResult(oai.toolResponseMetadata) || unwrapResult(oai.toolOutput);
         }
 
-        function renderOpenAi() {
-          const result = resultFromOpenAi(window.openai);
+        function renderOpenAi(event) {
+          const globals = event && event.detail && event.detail.globals
+            ? event.detail.globals
+            : window.openai;
+          const result = resultFromOpenAi(globals);
           if (result) render(result);
         }
 

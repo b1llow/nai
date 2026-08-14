@@ -268,6 +268,7 @@ describe("MCP image_id flow", () => {
       expect(encoded.isError).toBe(true);
       const text = (encoded.content[0] as { text?: string }).text ?? "";
       expect(text).toMatch(/vibe_id could not be stored/);
+      expect(encoded._meta?.mcp_tool_result).toBeUndefined();
     } finally {
       await client.close();
       await server.close();

@@ -211,22 +211,26 @@ export function registerNaiTools(
       _meta: imageWidgetToolMeta("Generating image…", "Image ready"),
     },
     async (args) =>
-      runTool(auth, async (token) => {
-        const owner = await artifactOwner(token);
-        const input = await resolveGenerateInput(env, owner, args);
-        const result = await generateImage(env, token, input);
-        return withImages(
-          { env, owner },
-          {
-            seed: result.seed,
-            model: result.model,
-            action: result.action,
-            width: result.width,
-            height: result.height,
-          },
-          result.images,
-        );
-      }),
+      runTool(
+        auth,
+        async (token) => {
+          const owner = await artifactOwner(token);
+          const input = await resolveGenerateInput(env, owner, args);
+          const result = await generateImage(env, token, input);
+          return withImages(
+            { env, owner },
+            {
+              seed: result.seed,
+              model: result.model,
+              action: result.action,
+              width: result.width,
+              height: result.height,
+            },
+            result.images,
+          );
+        },
+        { widget: true },
+      ),
   );
 
   server.registerTool(
@@ -245,21 +249,25 @@ export function registerNaiTools(
       _meta: imageWidgetToolMeta("Upscaling image…", "Upscaled image ready"),
     },
     async (args) =>
-      runTool(auth, async (token) => {
-        const owner = await artifactOwner(token);
-        const decoded = await resolveImageRef(env, owner, args.image, "image");
-        const images = await upscaleImage(env, token, {
-          ...args,
-          image: decoded.base64,
-          width: args.width ?? decoded.width,
-          height: args.height ?? decoded.height,
-        });
-        return withImages(
-          { env, owner },
-          { scale: args.scale === 4 ? 4 : 2 },
-          images,
-        );
-      }),
+      runTool(
+        auth,
+        async (token) => {
+          const owner = await artifactOwner(token);
+          const decoded = await resolveImageRef(env, owner, args.image, "image");
+          const images = await upscaleImage(env, token, {
+            ...args,
+            image: decoded.base64,
+            width: args.width ?? decoded.width,
+            height: args.height ?? decoded.height,
+          });
+          return withImages(
+            { env, owner },
+            { scale: args.scale === 4 ? 4 : 2 },
+            images,
+          );
+        },
+        { widget: true },
+      ),
   );
 
   server.registerTool(
@@ -282,17 +290,21 @@ export function registerNaiTools(
       _meta: imageWidgetToolMeta("Editing image…", "Edited image ready"),
     },
     async (args) =>
-      runTool(auth, async (token) => {
-        const owner = await artifactOwner(token);
-        const decoded = await resolveImageRef(env, owner, args.image, "image");
-        const images = await runDirector(env, token, {
-          ...args,
-          image: decoded.base64,
-          width: args.width ?? decoded.width,
-          height: args.height ?? decoded.height,
-        });
-        return withImages({ env, owner }, { req_type: args.req_type }, images);
-      }),
+      runTool(
+        auth,
+        async (token) => {
+          const owner = await artifactOwner(token);
+          const decoded = await resolveImageRef(env, owner, args.image, "image");
+          const images = await runDirector(env, token, {
+            ...args,
+            image: decoded.base64,
+            width: args.width ?? decoded.width,
+            height: args.height ?? decoded.height,
+          });
+          return withImages({ env, owner }, { req_type: args.req_type }, images);
+        },
+        { widget: true },
+      ),
   );
 
   server.registerTool(
@@ -390,36 +402,40 @@ export function registerNaiTools(
       _meta: imageWidgetToolMeta("Loading image…", "Image loaded"),
     },
     async (args) =>
-      runTool(auth, async (token) => {
-        const owner = await artifactOwner(token);
-        const img = await getImage(env, owner, args.image_id, "image_id");
-        const structuredContent = {
-          image_id: img.id,
-          filename: img.name,
-          mime_type: img.mime,
-          width: img.width,
-          height: img.height,
-          resource_uri: imageResourceUri(img.id),
-        };
-        return {
-          content: [
-            { type: "text", text: JSON.stringify(structuredContent, null, 2) },
-            {
-              type: "image",
-              data: img.base64,
-              mimeType: img.mime,
-              annotations: { audience: ["user"] as Array<"user" | "assistant"> },
-            },
-            {
-              type: "resource_link",
-              uri: structuredContent.resource_uri,
-              name: img.name,
-              mimeType: img.mime,
-            },
-          ],
-          structuredContent,
-        };
-      }),
+      runTool(
+        auth,
+        async (token) => {
+          const owner = await artifactOwner(token);
+          const img = await getImage(env, owner, args.image_id, "image_id");
+          const structuredContent = {
+            image_id: img.id,
+            filename: img.name,
+            mime_type: img.mime,
+            width: img.width,
+            height: img.height,
+            resource_uri: imageResourceUri(img.id),
+          };
+          return {
+            content: [
+              { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+              {
+                type: "image",
+                data: img.base64,
+                mimeType: img.mime,
+                annotations: { audience: ["user"] as Array<"user" | "assistant"> },
+              },
+              {
+                type: "resource_link",
+                uri: structuredContent.resource_uri,
+                name: img.name,
+                mimeType: img.mime,
+              },
+            ],
+            structuredContent,
+          };
+        },
+        { widget: true },
+      ),
   );
 
   server.registerTool(

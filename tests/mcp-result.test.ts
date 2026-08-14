@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mcpJson, mcpNeedAuth, withImages, withWidgetBridge } from "../src/mcp/result";
+import { mcpJson, mcpNeedAuth, runTool, withImages, withWidgetBridge } from "../src/mcp/result";
 import { base64ToBytes } from "../src/nai/binary";
 import { testEnv } from "./helpers";
 
@@ -86,6 +86,22 @@ describe("withImages", () => {
       isError: true,
     });
     expect(out._meta?.call_tool_result).toEqual(out._meta?.mcp_tool_result);
+  });
+
+  it("attaches widget _meta only when runTool is opted in", async () => {
+    const plain = await runTool("Bearer token-xx", async () => mcpJson({ text: "ok" }));
+    expect(plain._meta?.mcp_tool_result).toBeUndefined();
+    expect(plain.structuredContent).toEqual({ text: "ok" });
+
+    const widget = await runTool(
+      "Bearer token-xx",
+      async () => mcpJson({ text: "ok" }),
+      { widget: true },
+    );
+    expect(widget._meta?.mcp_tool_result).toEqual({
+      content: widget.content,
+      structuredContent: { text: "ok" },
+    });
   });
 
   it("does not advertise a base64 fallback when the image cannot be stored", async () => {

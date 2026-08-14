@@ -159,12 +159,16 @@ describe("image preview widget", () => {
     expect(gallery.nodes).toHaveLength(1);
     expect(status.textContent).toContain("nai-diffusion-4-5-full");
 
-    windowObj.openai = {
-      toolResponseMetadata: {
-        call_tool_result: imageResult(),
+    windowObj.openai = {};
+    emit("openai:set_globals", {
+      detail: {
+        globals: {
+          toolResponseMetadata: {
+            call_tool_result: imageResult(),
+          },
+        },
       },
-    };
-    emit("openai:set_globals", { detail: { globals: windowObj.openai } });
+    });
     expect(gallery.nodes).toHaveLength(1);
     expect(gallery.nodes[0]?.alt).toBe("NovelAI generated image");
   });

@@ -191,11 +191,13 @@ export async function withImages(
 export async function runTool(
   auth: string | null,
   fn: (auth: string) => Promise<McpToolResult>,
+  options?: { widget?: boolean },
 ): Promise<McpToolResult> {
-  if (!auth) return withWidgetBridge(mcpNeedAuth());
+  const finish = options?.widget ? withWidgetBridge : (result: McpToolResult) => result;
+  if (!auth) return finish(mcpNeedAuth());
   try {
-    return withWidgetBridge(await fn(auth));
+    return finish(await fn(auth));
   } catch (err) {
-    return withWidgetBridge(mcpError(err));
+    return finish(mcpError(err));
   }
 }

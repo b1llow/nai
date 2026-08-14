@@ -118,6 +118,7 @@ describe("MCP tools/list schemas", () => {
       expect(html).toContain("ui/notifications/initialized");
       expect(html).toContain("ui/notifications/tool-result");
       expect(html).toContain("openai:set_globals");
+      expect(html).toContain("event.detail.globals");
       expect(html).toContain("toolResponseMetadata");
       expect(html).toContain("mcp_tool_result");
       expect(html).toContain("result.isError");
