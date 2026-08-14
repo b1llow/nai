@@ -7,6 +7,10 @@ import type {
  * Redirect URIs accepted for DCR and the consent page.
  * CIMD clients are still fetched by URL; this blocks random DCR phishing
  * clients and unknown authorize redirects.
+ *
+ * Grok does not perform DCR itself: paste the pre-registered public client
+ * `grok-connector` (see `ensurePersistentGrokClient`) into Grok's Custom
+ * Connector form. DCR Grok clients still expire after 90 days.
  */
 export function isAllowedOAuthRedirect(raw: string): boolean {
   let url: URL;
@@ -43,6 +47,12 @@ export function isAllowedOAuthRedirect(raw: string): boolean {
     return (
       url.pathname === "/api/mcp/auth_callback" ||
       url.pathname === "/api/mcp/auth_callback/"
+    );
+  }
+  if (host === "grok.com" || host === "www.grok.com") {
+    return (
+      url.pathname === "/connectors-oauth-exchange-code" ||
+      url.pathname === "/connectors-oauth-exchange-code/"
     );
   }
   return false;

@@ -33,6 +33,7 @@ import { generateNativeText } from "../nai/text";
 import { generateVoice } from "../nai/voice";
 import type { GenerateImageInput } from "../nai/image-payload";
 import { imageResourceUri } from "../nai/image-input";
+import { MAX_IMAGE_SAMPLES } from "../limits";
 import {
   artifactOwner,
   getCachedVibe,
@@ -43,7 +44,13 @@ import {
   resolveImageRef,
   vibeIeKey,
 } from "./artifacts";
-import { imageWidgetToolMeta, registerImageWidget } from "./image-widget";
+import {
+  IMAGE_WIDGET_RENDER_TOOL,
+  IMAGE_WIDGET_URI,
+  imageToolStatusMeta,
+  imageWidgetToolMeta,
+  registerImageWidget,
+} from "./image-widget";
 import { publishImage } from "./public-image";
 import { mcpJson, mcpText, runTool, withImages, type McpContent } from "./result";
 
@@ -168,6 +175,39 @@ const getImageOutputSchema = z.object({
   image_url: z.string().optional(),
 });
 
+const renderImageOutputSchema = z.object({
+  image_id: z.string(),
+  image_url: z.string().optional(),
+  images: z.array(storedImageOutputSchema),
+  model: z.string().optional(),
+  seed: z.number().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+
+const RENDER_AFTER =
+  "After success, call nai_render_image_preview with the image_id (or image_ids) so ChatGPT can mount the preview UI. If image_id is null, this result already binds the preview — do not call nai_render_image_preview. Do not open ui:// URIs.";
+
+export function collectPreviewImageIds(args: {
+  image_id?: string;
+  image_ids?: string[];
+}): string[] {
+  const ids: string[] = [];
+  if (args.image_id?.trim()) ids.push(args.image_id.trim());
+  for (const raw of args.image_ids ?? []) {
+    const id = raw.trim();
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  if (ids.length > MAX_IMAGE_SAMPLES) {
+    throw openaiError(
+      400,
+      `Pass at most ${MAX_IMAGE_SAMPLES} unique images across image_id and image_ids.`,
+      { type: "invalid_request_error", param: "image_ids" },
+    );
+  }
+  return ids;
+}
+
 const tagsOutputSchema = z.object({
   tags: z.unknown(),
 });
@@ -213,32 +253,28 @@ export function registerNaiTools(
     {
       title: "Generate image",
       description:
-        "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns a public image_url (WebP) — embed that URL in markdown so the user can see the image. Also returns image_id — pass that image_id to nai_upscale, nai_director, nai_encode_vibe, nai_get_image, or img2img. Do not pass filenames such as image_0.png, and do not echo image bytes.",
+        `NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns a public image_url (WebP) — embed that URL in markdown so the user can see the image. Also returns image_id — pass that image_id to nai_upscale, nai_director, nai_encode_vibe, nai_get_image, nai_render_image_preview, or img2img. Do not pass filenames such as image_0.png, and do not echo image bytes. ${RENDER_AFTER}`,
       inputSchema: naiGenerateImageInputSchema,
       outputSchema: imageMetaOutputSchema,
-      _meta: imageWidgetToolMeta("Generating image…", "Image ready"),
+      _meta: imageToolStatusMeta("Generating image…", "Image ready"),
     },
     async (args) =>
-      runTool(
-        auth,
-        async (token) => {
-          const owner = await artifactOwner(token);
-          const input = await resolveGenerateInput(env, owner, args);
-          const result = await generateImage(env, token, input);
-          return withImages(
-            { env, owner, origin },
-            {
-              seed: result.seed,
-              model: result.model,
-              action: result.action,
-              width: result.width,
-              height: result.height,
-            },
-            result.images,
-          );
-        },
-        { widget: true },
-      ),
+      runTool(auth, async (token) => {
+        const owner = await artifactOwner(token);
+        const input = await resolveGenerateInput(env, owner, args);
+        const result = await generateImage(env, token, input);
+        return withImages(
+          { env, owner, origin },
+          {
+            seed: result.seed,
+            model: result.model,
+            action: result.action,
+            width: result.width,
+            height: result.height,
+          },
+          result.images,
+        );
+      }),
   );
 
   server.registerTool(
@@ -246,7 +282,7 @@ export function registerNaiTools(
     {
       title: "Upscale image",
       description:
-        "NovelAI 2x or 4x upscale. Costs Anlas. Pass image_id from a previous image tool (preferred) or PNG base64. Returns a public image_url and a new image_id.",
+        `NovelAI 2x or 4x upscale. Costs Anlas. Pass image_id from a previous image tool (preferred) or PNG base64. Returns a public image_url and a new image_id. ${RENDER_AFTER}`,
       inputSchema: z.object({
         image: z.string().describe(IMAGE_REF_HINT),
         scale: z.union([z.literal(2), z.literal(4)]).optional(),
@@ -254,28 +290,24 @@ export function registerNaiTools(
         height: z.number().int().optional(),
       }),
       outputSchema: upscaleOutputSchema,
-      _meta: imageWidgetToolMeta("Upscaling image…", "Upscaled image ready"),
+      _meta: imageToolStatusMeta("Upscaling image…", "Upscaled image ready"),
     },
     async (args) =>
-      runTool(
-        auth,
-        async (token) => {
-          const owner = await artifactOwner(token);
-          const decoded = await resolveImageRef(env, owner, args.image, "image");
-          const images = await upscaleImage(env, token, {
-            ...args,
-            image: decoded.base64,
-            width: args.width ?? decoded.width,
-            height: args.height ?? decoded.height,
-          });
-          return withImages(
-            { env, owner, origin },
-            { scale: args.scale === 4 ? 4 : 2 },
-            images,
-          );
-        },
-        { widget: true },
-      ),
+      runTool(auth, async (token) => {
+        const owner = await artifactOwner(token);
+        const decoded = await resolveImageRef(env, owner, args.image, "image");
+        const images = await upscaleImage(env, token, {
+          ...args,
+          image: decoded.base64,
+          width: args.width ?? decoded.width,
+          height: args.height ?? decoded.height,
+        });
+        return withImages(
+          { env, owner, origin },
+          { scale: args.scale === 4 ? 4 : 2 },
+          images,
+        );
+      }),
   );
 
   server.registerTool(
@@ -283,7 +315,7 @@ export function registerNaiTools(
     {
       title: "Director tools",
       description:
-        "NovelAI Director Tools: lineart, sketch, colorize, emotion, declutter, bg-removal. Pass image_id from a previous image tool (preferred) or PNG base64. Width/height default from stored metadata or the PNG IHDR. Returns a public image_url and a new image_id.",
+        `NovelAI Director Tools: lineart, sketch, colorize, emotion, declutter, bg-removal. Pass image_id from a previous image tool (preferred) or PNG base64. Width/height default from stored metadata or the PNG IHDR. Returns a public image_url and a new image_id. ${RENDER_AFTER}`,
       inputSchema: z.object({
         req_type: z.enum(DIRECTOR_TYPES),
         image: z.string().describe(IMAGE_REF_HINT),
@@ -295,24 +327,20 @@ export function registerNaiTools(
         emotion_level: z.number().int().min(0).max(5).optional(),
       }),
       outputSchema: directorOutputSchema,
-      _meta: imageWidgetToolMeta("Editing image…", "Edited image ready"),
+      _meta: imageToolStatusMeta("Editing image…", "Edited image ready"),
     },
     async (args) =>
-      runTool(
-        auth,
-        async (token) => {
-          const owner = await artifactOwner(token);
-          const decoded = await resolveImageRef(env, owner, args.image, "image");
-          const images = await runDirector(env, token, {
-            ...args,
-            image: decoded.base64,
-            width: args.width ?? decoded.width,
-            height: args.height ?? decoded.height,
-          });
-          return withImages({ env, owner, origin }, { req_type: args.req_type }, images);
-        },
-        { widget: true },
-      ),
+      runTool(auth, async (token) => {
+        const owner = await artifactOwner(token);
+        const decoded = await resolveImageRef(env, owner, args.image, "image");
+        const images = await runDirector(env, token, {
+          ...args,
+          image: decoded.base64,
+          width: args.width ?? decoded.width,
+          height: args.height ?? decoded.height,
+        });
+        return withImages({ env, owner, origin }, { req_type: args.req_type }, images);
+      }),
   );
 
   server.registerTool(
@@ -400,23 +428,110 @@ export function registerNaiTools(
     {
       title: "Get stored image",
       description:
-        "Reload a previously generated image by image_id. Returns the public image_url (re-publishes the WebP if needed). Pass image_id — not a filename.",
+        "Reload a previously generated image by image_id. Returns the public image_url (re-publishes the WebP if needed). Pass image_id — not a filename. This does not mount the ChatGPT preview widget; call nai_render_image_preview for that.",
       inputSchema: z.object({
         image_id: z
           .string()
           .describe("image_id or nai://image/img_... URI from a previous image tool"),
       }),
       outputSchema: getImageOutputSchema,
-      _meta: imageWidgetToolMeta("Loading image…", "Image loaded"),
+      _meta: imageToolStatusMeta("Loading image…", "Image loaded"),
+    },
+    async (args) =>
+      runTool(auth, async (token) => {
+        const owner = await artifactOwner(token);
+        const img = await getImage(env, owner, args.image_id, "image_id");
+        const published = await publishImage(env, origin, img.id, img.bytes);
+        const structuredContent: {
+          image_id: string;
+          filename: string;
+          mime_type: string;
+          width?: number;
+          height?: number;
+          resource_uri: string;
+          url?: string;
+          image_url?: string;
+        } = {
+          image_id: img.id,
+          filename: img.name,
+          mime_type: published?.mime ?? img.mime,
+          width: img.width,
+          height: img.height,
+          resource_uri: imageResourceUri(img.id),
+        };
+        if (published) {
+          structuredContent.url = published.url;
+          structuredContent.image_url = published.url;
+        }
+        const content: McpContent[] = [
+          { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+        ];
+        if (published) {
+          content.push({
+            type: "resource_link",
+            uri: published.url,
+            name: published.filename,
+            mimeType: published.mime,
+          });
+        } else {
+          content.push({
+            type: "image",
+            data: img.base64,
+            mimeType: img.mime,
+            annotations: { audience: ["user"] },
+          });
+          content.push({
+            type: "resource_link",
+            uri: structuredContent.resource_uri,
+            name: img.name,
+            mimeType: img.mime,
+          });
+        }
+        return { content, structuredContent };
+      }),
+  );
+
+  server.registerTool(
+    IMAGE_WIDGET_RENDER_TOOL,
+    {
+      title: "Render image preview",
+      description:
+        "Mount the NovelAI image preview UI in ChatGPT. Always call this after nai_generate_image, nai_upscale, or nai_director when the user should see the image. Pass image_id (and image_ids when n_samples > 1). You cannot open ui:// URIs yourself — this tool is what binds ui://novelai/image-preview-v3.html. Do not pass PNG base64 or filenames.",
+      inputSchema: z.object({
+        image_id: z
+          .string()
+          .describe(
+            "image_id or nai://image/img_... from a previous image tool. Required unless image_ids is set.",
+          )
+          .optional(),
+        image_ids: z
+          .array(z.string())
+          .min(1)
+          .max(MAX_IMAGE_SAMPLES)
+          .optional()
+          .describe(
+            `Additional image_ids when n_samples > 1. Combined with image_id, at most ${MAX_IMAGE_SAMPLES} unique ids.`,
+          ),
+        model: z.string().optional().describe("Optional caption from the generate result."),
+        seed: z.number().optional().describe("Optional caption from the generate result."),
+      }),
+      outputSchema: renderImageOutputSchema,
+      _meta: imageWidgetToolMeta("Rendering preview…", "Preview ready"),
     },
     async (args) =>
       runTool(
         auth,
         async (token) => {
+          const ids = collectPreviewImageIds(args);
+          if (!ids.length) {
+            throw openaiError(
+              400,
+              "Pass image_id or image_ids from a previous image tool.",
+              { type: "invalid_request_error", param: "image_id" },
+            );
+          }
           const owner = await artifactOwner(token);
-          const img = await getImage(env, owner, args.image_id, "image_id");
-          const published = await publishImage(env, origin, img.id, img.bytes);
-          const structuredContent: {
+          const loaded: Array<{
             image_id: string;
             filename: string;
             mime_type: string;
@@ -424,46 +539,60 @@ export function registerNaiTools(
             height?: number;
             resource_uri: string;
             url?: string;
-            image_url?: string;
-          } = {
-            image_id: img.id,
-            filename: img.name,
-            mime_type: published?.mime ?? img.mime,
-            width: img.width,
-            height: img.height,
-            resource_uri: imageResourceUri(img.id),
+          }> = [];
+          const content: McpContent[] = [];
+          for (const raw of ids) {
+            const img = await getImage(env, owner, raw, "image_id");
+            const published = await publishImage(env, origin, img.id, img.bytes);
+            const resource_uri = imageResourceUri(img.id);
+            loaded.push({
+              image_id: img.id,
+              filename: img.name,
+              mime_type: published?.mime ?? img.mime,
+              width: img.width,
+              height: img.height,
+              resource_uri,
+              ...(published ? { url: published.url } : {}),
+            });
+            if (published) {
+              content.push({
+                type: "resource_link",
+                uri: published.url,
+                name: published.filename,
+                mimeType: published.mime,
+              });
+            } else {
+              content.push({
+                type: "image",
+                data: img.base64,
+                mimeType: img.mime,
+                annotations: { audience: ["user"] },
+              });
+              content.push({
+                type: "resource_link",
+                uri: resource_uri,
+                name: img.name,
+                mimeType: img.mime,
+              });
+            }
+          }
+          const first = loaded[0]!;
+          const structuredContent = {
+            image_id: first.image_id,
+            images: loaded,
+            ...(first.url ? { image_url: first.url } : {}),
+            ...(args.model ? { model: args.model } : {}),
+            ...(typeof args.seed === "number" ? { seed: args.seed } : {}),
+            ...(first.width !== undefined ? { width: first.width } : {}),
+            ...(first.height !== undefined ? { height: first.height } : {}),
           };
-          if (published) {
-            structuredContent.url = published.url;
-            structuredContent.image_url = published.url;
-          }
-          const content: McpContent[] = [
-            { type: "text", text: JSON.stringify(structuredContent, null, 2) },
-          ];
-          if (published) {
-            content.push({
-              type: "resource_link",
-              uri: published.url,
-              name: published.filename,
-              mimeType: published.mime,
-            });
-          } else {
-            content.push({
-              type: "image",
-              data: img.base64,
-              mimeType: img.mime,
-              annotations: { audience: ["user"] as Array<"user" | "assistant"> },
-            });
-            content.push({
-              type: "resource_link",
-              uri: structuredContent.resource_uri,
-              name: img.name,
-              mimeType: img.mime,
-            });
-          }
+          content.unshift({
+            type: "text",
+            text: JSON.stringify(structuredContent, null, 2),
+          });
           return { content, structuredContent };
         },
-        { widget: true },
+        { widget: true, templateUri: IMAGE_WIDGET_URI },
       ),
   );
 
@@ -753,7 +882,7 @@ export function registerNaiTools(
           role: "user" as const,
           content: {
             type: "text" as const,
-            text: `Call nai_generate_image with model=${DEFAULT_IMAGE_MODEL}, resolution=${DEFAULT_RESOLUTION}, prompt=${JSON.stringify(prompt)}${negative_prompt ? `, negative_prompt=${JSON.stringify(negative_prompt)}` : ""}.`,
+            text: `Call nai_generate_image with model=${DEFAULT_IMAGE_MODEL}, resolution=${DEFAULT_RESOLUTION}, prompt=${JSON.stringify(prompt)}${negative_prompt ? `, negative_prompt=${JSON.stringify(negative_prompt)}` : ""}. Then call nai_render_image_preview with the returned image_id.`,
           },
         },
       ],
@@ -777,7 +906,7 @@ export function registerNaiTools(
           role: "user" as const,
           content: {
             type: "text" as const,
-            text: `Call nai_generate_image with prompt=${JSON.stringify(scene)}, character_prompts=[{prompt:${JSON.stringify(char1)},x:0.3,y:0.5},{prompt:${JSON.stringify(char2)},x:0.7,y:0.5}], model=${DEFAULT_IMAGE_MODEL}.`,
+            text: `Call nai_generate_image with prompt=${JSON.stringify(scene)}, character_prompts=[{prompt:${JSON.stringify(char1)},x:0.3,y:0.5},{prompt:${JSON.stringify(char2)},x:0.7,y:0.5}], model=${DEFAULT_IMAGE_MODEL}. Then call nai_render_image_preview with the returned image_id.`,
           },
         },
       ],

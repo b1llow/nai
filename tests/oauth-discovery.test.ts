@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GROK_OAUTH_CLIENT_ID } from "../src/oauth/grok-client";
 import worker from "../src/index";
 import { testEnv, testExecutionContext } from "./helpers";
 
@@ -226,6 +227,34 @@ describe("MCP OAuth discovery", () => {
       ctx,
     );
     expect(evil.status).toBe(400);
+  });
+
+  it("serves consent for the pre-registered Grok client", async () => {
+    const url = new URL("https://nai.hoshinoaya.com/authorize");
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("client_id", GROK_OAUTH_CLIENT_ID);
+    url.searchParams.set(
+      "redirect_uri",
+      "https://grok.com/connectors-oauth-exchange-code/",
+    );
+    url.searchParams.set("scope", "mcp offline_access");
+    url.searchParams.set(
+      "code_challenge",
+      "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+    );
+    url.searchParams.set("code_challenge_method", "S256");
+    url.searchParams.set("state", "s1");
+    const res = await worker.fetch(
+      new Request(url),
+      testEnv(),
+      testExecutionContext(),
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toMatch(/grok-connector/);
+    expect(html).toMatch(/Grok/);
+    expect(html).toMatch(/connectors-oauth-exchange-code/);
+    expect(html).toMatch(/Persistent API token/i);
   });
 
   it("returns 429 when DCR is rate-limited", async () => {

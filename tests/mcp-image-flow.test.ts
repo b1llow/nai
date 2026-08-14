@@ -1,8 +1,11 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { IMAGE_WIDGET_RENDER_TOOL, IMAGE_WIDGET_URI } from "../src/mcp/image-widget";
 import { createNaiMcpServer } from "../src/mcp/server";
+import { collectPreviewImageIds } from "../src/mcp/tools";
 import { base64ToBytes } from "../src/nai/binary";
+import { HttpError } from "../src/errors";
 import { testEnv } from "./helpers";
 
 const PNG_1X1 =
@@ -79,7 +82,21 @@ describe("MCP image_id flow", () => {
       );
       expect(gen.images[0]?.filename).toBe("image_0.png");
       expect(gen.images[0]?.url).toBe(gen.image_url);
-      expect(generated._meta).toMatchObject({
+      expect(generated._meta?.["openai/outputTemplate"]).toBeUndefined();
+      expect(generated._meta?.mcp_tool_result).toBeUndefined();
+
+      const preview = await client.callTool({
+        name: IMAGE_WIDGET_RENDER_TOOL,
+        arguments: {
+          image_id: gen.image_id,
+          model: "nai-diffusion-4-5-full",
+          seed: 1,
+        },
+      });
+      expect(preview.isError).not.toBe(true);
+      expect(preview._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
         mcp_tool_result: {
           structuredContent: { image_id: gen.image_id },
         },
@@ -278,6 +295,102 @@ describe("MCP image_id flow", () => {
       const text = (encoded.content[0] as { text?: string }).text ?? "";
       expect(text).toMatch(/vibe_id could not be stored/);
       expect(encoded._meta?.mcp_tool_result).toBeUndefined();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("rejects more than four unique preview ids instead of truncating", async () => {
+    const ids = ["aa", "bb", "cc", "dd", "ee"].map((hex) => "img_" + hex.repeat(16));
+    expect(() =>
+      collectPreviewImageIds({ image_id: ids[0], image_ids: ids.slice(1) }),
+    ).toThrow(HttpError);
+    expect(() =>
+      collectPreviewImageIds({ image_id: ids[0], image_ids: ids.slice(1) }),
+    ).toThrow(/at most 4 unique images/);
+    expect(
+      collectPreviewImageIds({
+        image_id: ids[0],
+        image_ids: [ids[0]!, ids[1]!, ids[2]!, ids[3]!],
+      }),
+    ).toEqual(ids.slice(0, 4));
+
+    const { client, server } = await connectedClient();
+    try {
+      const excess = await client.callTool({
+        name: IMAGE_WIDGET_RENDER_TOOL,
+        arguments: { image_id: ids[0], image_ids: ids.slice(1) },
+      });
+      expect(excess.isError).toBe(true);
+      const text = (excess.content[0] as { text?: string }).text ?? "";
+      expect(text).toMatch(/at most 4 unique images/);
+      expect(excess._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("generate still mounts the preview when image_id cannot be stored", async () => {
+    vi.stubGlobal(
+      "fetch",
+      async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/ai/generate-image") && !url.includes("suggest")) {
+          return new Response(pngZip(), {
+            headers: { "content-type": "application/zip" },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      },
+    );
+
+    const env = testEnv({ IMG_BUCKET: undefined });
+
+    const { client, server } = await connectedClient(env);
+    try {
+      const generated = await client.callTool({
+        name: "nai_generate_image",
+        arguments: { prompt: "1girl", seed: 1 },
+      });
+      expect(generated.isError).not.toBe(true);
+      expect(generated.structuredContent).toMatchObject({ image_id: null });
+      expect(generated._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        mcp_tool_result: {
+          structuredContent: { image_id: null },
+        },
+      });
+      expect(generated.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "image", mimeType: "image/png" }),
+        ]),
+      );
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("render preview requires an image_id and still binds the widget on errors", async () => {
+    const { client, server } = await connectedClient();
+    try {
+      const empty = await client.callTool({
+        name: IMAGE_WIDGET_RENDER_TOOL,
+        arguments: {},
+      });
+      expect(empty.isError).toBe(true);
+      const text = (empty.content[0] as { text?: string }).text ?? "";
+      expect(text).toMatch(/image_id or image_ids/);
+      expect(empty._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+      });
     } finally {
       await client.close();
       await server.close();

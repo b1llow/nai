@@ -52,7 +52,7 @@ The header is forwarded upstream unchanged.
 
 ChatGPT Cloud and other remote MCP hosts **cannot** set a custom `Authorization` header. This Worker is an OAuth 2.1 authorization server (PKCE S256, CIMD + DCR, refresh tokens). On `/authorize`, paste a NovelAI Persistent API token. The grant stores that token encrypted in Workers KV (`OAUTH_KV`) and issues ChatGPT its own access token. Completing OAuth does **not** send your NovelAI email or password to this Worker.
 
-Protected resource metadata pins `resource` to the request origin plus `/mcp` for hosts this Worker serves (`nai.hoshinoaya.com`, loopback, `*.workers.dev`). ChatGPT should use `https://nai.hoshinoaya.com/mcp`. Dynamic client registration only accepts loopback URLs, ChatGPT connector OAuth callbacks, and Claude's `https://claude.ai/api/mcp/auth_callback`. The consent page shows the client name (default **an MCP client**, never assumed to be ChatGPT), `client_id`, and `redirect_uri` so you can confirm the callback before pasting a token.
+Protected resource metadata pins `resource` to the request origin plus `/mcp` for hosts this Worker serves (`nai.hoshinoaya.com`, loopback, `*.workers.dev`). ChatGPT should use `https://nai.hoshinoaya.com/mcp`. Dynamic client registration only accepts loopback URLs, ChatGPT connector OAuth callbacks, Claude's `https://claude.ai/api/mcp/auth_callback`, and Grok's `https://grok.com/connectors-oauth-exchange-code/`. The consent page shows the client name (default **an MCP client**, never assumed to be ChatGPT), `client_id`, and `redirect_uri` so you can confirm the callback before pasting a token.
 
 ### ChatGPT (Developer Mode)
 
@@ -62,6 +62,18 @@ Protected resource metadata pins `resource` to the request origin plus `/mcp` fo
 4. ChatGPT refreshes access with `offline_access`; you should not need to paste the token on every chat.
 
 Create a persistent token in the NovelAI account settings. Do not send email/password to this worker. Do not put a NovelAI token in a Worker secret: this URL is public, and a shared fallback token would let anyone use your account.
+
+### Grok (grok.com Custom Connector)
+
+Grok does not perform dynamic client registration — its Custom Connector form asks for a pre-issued Client ID. This Worker writes a public PKCE client (`grok-connector`) into `OAUTH_KV` without the 90-day DCR TTL, so the same ID stays valid. Do not mint a Grok client via `POST /oauth/register`: those records expire and saved connectors then fail with an unknown client.
+
+At [grok.com/connectors](https://grok.com/connectors) → New Connector → Custom:
+
+1. Server URL: `https://nai.hoshinoaya.com/mcp` (the MCP endpoint, **not** `/authorize`).
+2. When Grok shows **OAuth Credentials Required**: Client ID = `grok-connector`, Client Secret = leave blank, PKCE = S256.
+3. Complete sign-in on `/authorize` by pasting a NovelAI Persistent API token.
+
+The `client_id` is a public identifier (no secret; every user authorizes it separately).
 
 ### Cursor / Claude Desktop
 
@@ -97,6 +109,7 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_upscale` | `api.novelai.net` `/ai/upscale`. Accepts `image_id` or PNG base64. Returns `image_url` + `image_id`. |
 | `nai_director` | `image.novelai.net` `/ai/augment-image`. Accepts `image_id` or PNG base64. Returns `image_url` + `image_id`. |
 | `nai_get_image` | Reload a stored image by `image_id` (re-publishes the public URL if needed) |
+| `nai_render_image_preview` | ChatGPT / MCP Apps render tool. Pass `image_id` from a previous image tool to mount `ui://novelai/image-preview-v3.html`. |
 | `nai_suggest_tags` | `/ai/generate-image/suggest-tags` |
 | `nai_encode_vibe` | `/ai/encode-vibe`. Returns `vibe_id` (token stays server-side; repeats are cached). |
 | `nai_chat` | existing OpenAI-compatible chat proxy |
@@ -110,11 +123,11 @@ Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://cat
 
 Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
 
-Image tools return a public `image_url` (`https://nai.hoshinoaya.com/i/img_<id>.webp`) plus an `image_id` / `nai://image/...` handle for later tool calls. Clients can render the URL with a normal `<img src>` or markdown image. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, or img2img — not a filename such as `image_0.png`, and not image bytes. Original PNGs live in R2 (`orig/<id>.png`), scoped to the NovelAI token, and never expire. The public WebP (quality 99) is a separate R2 object served by `GET /i/:file` with `Cache-Control: public, max-age=31536000, immutable`. URLs are capability URLs (128-bit `img_` id, no auth). If R2 or the Images binding is unavailable, tools fall back to PNG ImageContent.
+Image tools return a public `image_url` (`https://nai.hoshinoaya.com/i/img_<id>.webp`) plus an `image_id` / `nai://image/...` handle for later tool calls. Clients can render the URL with a normal `<img src>` or markdown image. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, `nai_render_image_preview`, or img2img — not a filename such as `image_0.png`, and not image bytes. Original PNGs live in R2 (`orig/<id>.png`), scoped to the NovelAI token, and never expire. The public WebP (quality 99) is a separate R2 object served by `GET /i/:file` with `Cache-Control: public, max-age=31536000, immutable`. URLs are capability URLs (128-bit `img_` id, no auth). If R2 or the Images binding is unavailable, tools fall back to PNG ImageContent.
 
 V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached in KV. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
 
-`nai_generate_image`, `nai_upscale`, `nai_director`, and `nai_get_image` advertise `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. ChatGPT also receives the same envelope on tool-result `_meta.mcp_tool_result` / `call_tool_result` (widget-only; the model still sees `structuredContent` without image bytes). The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin), and allows that origin in the widget CSP `resourceDomains` so the preview can load the public URL. The widget prefers `structuredContent.images[].url` and falls back to base64 image blocks. It shows tool errors instead of a false “image was hidden” status.
+Only `nai_render_image_preview` advertises `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget (OpenAI’s decoupled data/render pattern). Generate / upscale / director / get-image are data tools: they return `image_url` and `image_id` and do not bind the template. After those tools succeed, the model should call `nai_render_image_preview` with the `image_id` — hosts cannot open `ui://` URIs, and `_meta` on a data-tool result is not model-visible. The render tool also copies the template URI onto the tool-result `_meta` plus `mcp_tool_result` / `call_tool_result` so ChatGPT can mount the iframe. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. The widget resource sets `_meta.ui.domain` / `openai/widgetDomain` to `https://nai.hoshinoaya.com` so ChatGPT can submit the connector (unique sandbox origin), and allows that origin in the widget CSP `resourceDomains` so the preview can load the public URL. The widget prefers `structuredContent.images[].url` and falls back to base64 image blocks. It shows tool errors instead of a false “image was hidden” status.
 
 Not implemented: login/register, encrypted story objects / keystore, module training, `/ai/classify`, stepwise image streaming.
 
