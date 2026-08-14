@@ -1,8 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/server";
+import { MCP_ISSUER } from "../limits";
 
 export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v2.html";
 export const IMAGE_WIDGET_MIME_TYPE = "text/html;profile=mcp-app";
 export const IMAGE_WIDGET_PROTOCOL_VERSION = "2026-01-26";
+/** Unique origin ChatGPT uses to sandbox this template (required for app submission). */
+export const IMAGE_WIDGET_DOMAIN = MCP_ISSUER;
 
 export function imageWidgetToolMeta(
   invoking: string,
@@ -33,11 +36,18 @@ export function registerImageWidget(server: McpServer): void {
           text: IMAGE_WIDGET_HTML,
           _meta: {
             ui: {
+              domain: IMAGE_WIDGET_DOMAIN,
               prefersBorder: true,
               csp: {
                 connectDomains: [],
                 resourceDomains: [],
               },
+            },
+            "openai/widgetDomain": IMAGE_WIDGET_DOMAIN,
+            "openai/widgetPrefersBorder": true,
+            "openai/widgetCSP": {
+              connect_domains: [],
+              resource_domains: [],
             },
           },
         },

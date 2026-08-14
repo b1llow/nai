@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { RESOLUTION_PRESET_IDS } from "../src/nai/catalog";
 import {
+  IMAGE_WIDGET_DOMAIN,
   IMAGE_WIDGET_HTML,
   IMAGE_WIDGET_MIME_TYPE,
   IMAGE_WIDGET_URI,
@@ -110,7 +111,16 @@ describe("MCP tools/list schemas", () => {
         uri: IMAGE_WIDGET_URI,
         mimeType: IMAGE_WIDGET_MIME_TYPE,
         text: IMAGE_WIDGET_HTML,
+        _meta: {
+          ui: {
+            domain: IMAGE_WIDGET_DOMAIN,
+            prefersBorder: true,
+            csp: { connectDomains: [], resourceDomains: [] },
+          },
+          "openai/widgetDomain": IMAGE_WIDGET_DOMAIN,
+        },
       });
+      expect(IMAGE_WIDGET_DOMAIN).toBe("https://nai.hoshinoaya.com");
       const previewContent = preview.contents[0];
       const html =
         previewContent && "text" in previewContent ? previewContent.text : "";
