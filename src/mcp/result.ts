@@ -29,20 +29,25 @@ export type McpToolResult = {
 };
 
 /** Widget-only envelope for ChatGPT `toolResponseMetadata` (not model-visible). */
-export function withWidgetBridge(result: McpToolResult): McpToolResult {
+export function withWidgetBridge(
+  result: McpToolResult,
+  templateUri?: string,
+): McpToolResult {
   const envelope: Record<string, unknown> = { content: result.content };
   if (result.structuredContent !== undefined) {
     envelope.structuredContent = result.structuredContent;
   }
   if (result.isError) envelope.isError = true;
-  return {
-    ...result,
-    _meta: {
-      ...result._meta,
-      mcp_tool_result: envelope,
-      call_tool_result: envelope,
-    },
+  const _meta: Record<string, unknown> = {
+    ...result._meta,
+    mcp_tool_result: envelope,
+    call_tool_result: envelope,
   };
+  if (templateUri) {
+    _meta.ui = { resourceUri: templateUri };
+    _meta["openai/outputTemplate"] = templateUri;
+  }
+  return { ...result, _meta };
 }
 
 export type ImageBlob = {
@@ -185,15 +190,17 @@ export async function withImages(
     type: "text",
     text: JSON.stringify(structuredContent, null, 2),
   });
-  return withWidgetBridge({ content, structuredContent });
+  return { content, structuredContent };
 }
 
 export async function runTool(
   auth: string | null,
   fn: (auth: string) => Promise<McpToolResult>,
-  options?: { widget?: boolean },
+  options?: { widget?: boolean; templateUri?: string },
 ): Promise<McpToolResult> {
-  const finish = options?.widget ? withWidgetBridge : (result: McpToolResult) => result;
+  const finish = options?.widget
+    ? (result: McpToolResult) => withWidgetBridge(result, options.templateUri)
+    : (result: McpToolResult) => result;
   if (!auth) return finish(mcpNeedAuth());
   try {
     return finish(await fn(auth));

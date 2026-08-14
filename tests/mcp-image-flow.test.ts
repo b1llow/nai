@@ -1,6 +1,7 @@
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { IMAGE_WIDGET_RENDER_TOOL, IMAGE_WIDGET_URI } from "../src/mcp/image-widget";
 import { createNaiMcpServer } from "../src/mcp/server";
 import { base64ToBytes } from "../src/nai/binary";
 import { testEnv } from "./helpers";
@@ -74,7 +75,21 @@ describe("MCP image_id flow", () => {
       expect(gen.files).toBeUndefined();
       expect(gen.image_id).toMatch(/^img_[a-f0-9]{32}$/);
       expect(gen.images[0]?.filename).toBe("image_0.png");
-      expect(generated._meta).toMatchObject({
+      expect(generated._meta?.["openai/outputTemplate"]).toBeUndefined();
+      expect(generated._meta?.mcp_tool_result).toBeUndefined();
+
+      const preview = await client.callTool({
+        name: IMAGE_WIDGET_RENDER_TOOL,
+        arguments: {
+          image_id: gen.image_id,
+          model: "nai-diffusion-4-5-full",
+          seed: 1,
+        },
+      });
+      expect(preview.isError).not.toBe(true);
+      expect(preview._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
         mcp_tool_result: {
           structuredContent: { image_id: gen.image_id },
         },
@@ -269,6 +284,26 @@ describe("MCP image_id flow", () => {
       const text = (encoded.content[0] as { text?: string }).text ?? "";
       expect(text).toMatch(/vibe_id could not be stored/);
       expect(encoded._meta?.mcp_tool_result).toBeUndefined();
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("render preview requires an image_id and still binds the widget on errors", async () => {
+    const { client, server } = await connectedClient();
+    try {
+      const empty = await client.callTool({
+        name: IMAGE_WIDGET_RENDER_TOOL,
+        arguments: {},
+      });
+      expect(empty.isError).toBe(true);
+      const text = (empty.content[0] as { text?: string }).text ?? "";
+      expect(text).toMatch(/image_id or image_ids/);
+      expect(empty._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+      });
     } finally {
       await client.close();
       await server.close();

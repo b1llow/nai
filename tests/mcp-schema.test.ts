@@ -6,9 +6,14 @@ import {
   IMAGE_WIDGET_DOMAIN,
   IMAGE_WIDGET_HTML,
   IMAGE_WIDGET_MIME_TYPE,
+  IMAGE_WIDGET_RENDER_TOOL,
   IMAGE_WIDGET_URI,
 } from "../src/mcp/image-widget";
-import { createNaiMcpServer, handleMcp } from "../src/mcp/server";
+import {
+  createNaiMcpServer,
+  handleMcp,
+  MCP_SERVER_INSTRUCTIONS,
+} from "../src/mcp/server";
 import { naiGenerateImageInputSchema } from "../src/mcp/tools";
 import { testEnv, testExecutionContext } from "./helpers";
 
@@ -93,14 +98,19 @@ describe("MCP tools/list schemas", () => {
         "nai_director",
         "nai_get_image",
       ]) {
-        expect(
-          tools.find((tool) => tool.name === name)?._meta,
-          name,
-        ).toMatchObject({
-          ui: { resourceUri: IMAGE_WIDGET_URI },
-          "openai/outputTemplate": IMAGE_WIDGET_URI,
-        });
+        const meta = tools.find((tool) => tool.name === name)?._meta;
+        expect(meta, name).not.toHaveProperty("openai/outputTemplate");
+        expect((meta as { ui?: { resourceUri?: string } } | undefined)?.ui?.resourceUri).toBeUndefined();
       }
+
+      const render = tools.find((tool) => tool.name === IMAGE_WIDGET_RENDER_TOOL);
+      expect(render?._meta).toMatchObject({
+        ui: { resourceUri: IMAGE_WIDGET_URI },
+        "openai/outputTemplate": IMAGE_WIDGET_URI,
+        "openai/widgetAccessible": true,
+      });
+      expect(client.getInstructions()).toBe(MCP_SERVER_INSTRUCTIONS);
+      expect(MCP_SERVER_INSTRUCTIONS).toContain(IMAGE_WIDGET_RENDER_TOOL);
 
       const getImage = tools.find((t) => t.name === "nai_get_image");
       expect(getImage).toBeDefined();
@@ -170,7 +180,9 @@ describe("MCP tools/list schemas", () => {
         jsonSchemaEnum(generate?.inputSchema.properties?.resolution),
       ).toContain("normal_portrait");
       expect(generate?.outputSchema).toBeDefined();
-      expect(generate?._meta).toMatchObject({
+      expect(generate?._meta).not.toHaveProperty("openai/outputTemplate");
+      const render = tools.find((tool) => tool.name === IMAGE_WIDGET_RENDER_TOOL);
+      expect(render?._meta).toMatchObject({
         ui: { resourceUri: IMAGE_WIDGET_URI },
         "openai/outputTemplate": IMAGE_WIDGET_URI,
       });
