@@ -105,7 +105,7 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_subscription` | `image.novelai.net` `/user/subscription` |
 | `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
 
-Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, `nai://image/{image_id}` (generated PNGs; not listed), and `ui://novelai/image-preview-v1.html` (MCP App / ChatGPT output template for inline image preview).
+Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, `nai://image/{image_id}` (generated PNGs; not listed), and `ui://novelai/image-preview-v2.html` (MCP App / ChatGPT output template for inline image preview).
 
 Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
 
@@ -113,7 +113,7 @@ Image tools return MCP `image` content (PNG) for the current client UI **and** a
 
 V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
 
-`nai_generate_image`, `nai_upscale`, `nai_director`, and `nai_get_image` advertise `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget. Hosts that implement MCP Apps (or ChatGPT Apps) can render the PNG `ImageContent` inline. The widget only reads image blocks from the tool result; it does not fetch remote URLs.
+`nai_generate_image`, `nai_upscale`, `nai_director`, and `nai_get_image` advertise `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget. The view completes the MCP Apps `ui/initialize` handshake before the host sends `ui/notifications/tool-result`. ChatGPT also receives the same envelope on tool-result `_meta.mcp_tool_result` / `call_tool_result` (widget-only; the model still sees `structuredContent` without PNG bytes). The widget renders those image blocks as data URLs and shows tool errors instead of a false “image was hidden” status. It does not fetch remote URLs.
 
 Tool `ImageContent` can appear in the host's tool-result UI. That is a different channel from the final assistant message; this server cannot promote a tool image into the chat bubble. There is no public HTTPS image CDN.
 

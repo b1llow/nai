@@ -1,7 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 
-export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v1.html";
+export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v2.html";
 export const IMAGE_WIDGET_MIME_TYPE = "text/html;profile=mcp-app";
+export const IMAGE_WIDGET_PROTOCOL_VERSION = "2026-01-26";
 
 export function imageWidgetToolMeta(
   invoking: string,
@@ -71,12 +72,33 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
         const status = document.getElementById("status");
         const gallery = document.getElementById("gallery");
         const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+        const initializeId = 1;
+        let initialized = false;
+
+        function postToHost(message) {
+          if (!window.parent || window.parent === window) return;
+          window.parent.postMessage(message, "*");
+        }
 
         function unwrapResult(value) {
           if (!value || typeof value !== "object") return null;
           if (Array.isArray(value.content)) return value;
+          if (value.mcp_tool_result && typeof value.mcp_tool_result === "object") {
+            return unwrapResult(value.mcp_tool_result);
+          }
+          if (value.call_tool_result && typeof value.call_tool_result === "object") {
+            return unwrapResult(value.call_tool_result);
+          }
           if (value.result && typeof value.result === "object") return unwrapResult(value.result);
           return null;
+        }
+
+        function textBlocks(result) {
+          if (!result || !Array.isArray(result.content)) return [];
+          return result.content
+            .filter((block) => block && block.type === "text" && typeof block.text === "string")
+            .map((block) => block.text.trim())
+            .filter(Boolean);
         }
 
         function imageBlocks(result) {
@@ -102,11 +124,18 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
 
         function render(value) {
           const result = unwrapResult(value);
-          const blocks = imageBlocks(result);
           gallery.replaceChildren();
+          if (!result) return;
 
+          if (result.isError) {
+            status.textContent = textBlocks(result)[0] || "The image tool failed.";
+            return;
+          }
+
+          const blocks = imageBlocks(result);
           if (!blocks.length) {
-            status.textContent = "The image was generated, but this host did not expose its image block to the preview.";
+            status.textContent = textBlocks(result)[0]
+              || "The image was generated, but this host did not expose its image block to the preview.";
             return;
           }
 
@@ -123,16 +152,52 @@ export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
           });
         }
 
+        function resultFromOpenAi(oai) {
+          if (!oai || typeof oai !== "object") return null;
+          return unwrapResult(oai.toolResponseMetadata) || unwrapResult(oai.toolOutput);
+        }
+
+        function renderOpenAi() {
+          const result = resultFromOpenAi(window.openai);
+          if (result) render(result);
+        }
+
         window.addEventListener("message", (event) => {
           if (event.source !== window.parent) return;
           const message = event.data;
           if (!message || message.jsonrpc !== "2.0") return;
+
+          if (message.id == initializeId && message.result && !message.method) {
+            if (initialized) return;
+            initialized = true;
+            postToHost({ jsonrpc: "2.0", method: "ui/notifications/initialized" });
+            return;
+          }
+
           if (message.method === "ui/notifications/tool-result") render(message.params);
+          if (message.method === "ui/notifications/tool-cancelled") {
+            gallery.replaceChildren();
+            const reason = message.params && typeof message.params.reason === "string"
+              ? message.params.reason
+              : "";
+            status.textContent = reason || "Image generation was cancelled.";
+          }
         }, { passive: true });
 
-        const compat = window.openai && window.openai.toolResponseMetadata;
-        const initial = compat && (compat.mcp_tool_result || compat.call_tool_result);
-        if (initial) render(initial);
+        window.addEventListener("openai:set_globals", renderOpenAi, { passive: true });
+
+        postToHost({
+          jsonrpc: "2.0",
+          id: initializeId,
+          method: "ui/initialize",
+          params: {
+            protocolVersion: "2026-01-26",
+            appInfo: { name: "novelai-image-preview", version: "1.0.0" },
+            appCapabilities: {},
+          },
+        });
+
+        renderOpenAi();
       })();
     </script>
   </body>

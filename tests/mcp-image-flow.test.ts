@@ -74,6 +74,14 @@ describe("MCP image_id flow", () => {
       expect(gen.files).toBeUndefined();
       expect(gen.image_id).toMatch(/^img_[a-f0-9]{32}$/);
       expect(gen.images[0]?.filename).toBe("image_0.png");
+      expect(generated._meta).toMatchObject({
+        mcp_tool_result: {
+          structuredContent: { image_id: gen.image_id },
+        },
+        call_tool_result: {
+          structuredContent: { image_id: gen.image_id },
+        },
+      });
 
       const upscaled = await client.callTool({
         name: "nai_upscale",

@@ -25,7 +25,25 @@ export type McpToolResult = {
   content: McpContent[];
   structuredContent?: Record<string, unknown>;
   isError?: boolean;
+  _meta?: Record<string, unknown>;
 };
+
+/** Widget-only envelope for ChatGPT `toolResponseMetadata` (not model-visible). */
+export function withWidgetBridge(result: McpToolResult): McpToolResult {
+  const envelope: Record<string, unknown> = { content: result.content };
+  if (result.structuredContent !== undefined) {
+    envelope.structuredContent = result.structuredContent;
+  }
+  if (result.isError) envelope.isError = true;
+  return {
+    ...result,
+    _meta: {
+      ...result._meta,
+      mcp_tool_result: envelope,
+      call_tool_result: envelope,
+    },
+  };
+}
 
 export type ImageBlob = {
   name: string;
@@ -167,17 +185,17 @@ export async function withImages(
     type: "text",
     text: JSON.stringify(structuredContent, null, 2),
   });
-  return { content, structuredContent };
+  return withWidgetBridge({ content, structuredContent });
 }
 
 export async function runTool(
   auth: string | null,
   fn: (auth: string) => Promise<McpToolResult>,
 ): Promise<McpToolResult> {
-  if (!auth) return mcpNeedAuth();
+  if (!auth) return withWidgetBridge(mcpNeedAuth());
   try {
-    return await fn(auth);
+    return withWidgetBridge(await fn(auth));
   } catch (err) {
-    return mcpError(err);
+    return withWidgetBridge(mcpError(err));
   }
 }

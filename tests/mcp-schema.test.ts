@@ -114,7 +114,13 @@ describe("MCP tools/list schemas", () => {
       const previewContent = preview.contents[0];
       const html =
         previewContent && "text" in previewContent ? previewContent.text : "";
+      expect(html).toContain("ui/initialize");
+      expect(html).toContain("ui/notifications/initialized");
       expect(html).toContain("ui/notifications/tool-result");
+      expect(html).toContain("openai:set_globals");
+      expect(html).toContain("toolResponseMetadata");
+      expect(html).toContain("mcp_tool_result");
+      expect(html).toContain("result.isError");
       expect(html).toContain('block.type !== "image"');
       const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
       expect(script).toBeDefined();

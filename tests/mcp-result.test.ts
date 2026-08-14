@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mcpJson, withImages } from "../src/mcp/result";
+import { mcpJson, mcpNeedAuth, withImages, withWidgetBridge } from "../src/mcp/result";
 import { base64ToBytes } from "../src/nai/binary";
 import { testEnv } from "./helpers";
 
@@ -71,6 +71,21 @@ describe("withImages", () => {
       name: "image_0.png",
       mimeType: "image/png",
     });
+    expect(out._meta?.mcp_tool_result).toEqual({
+      content: out.content,
+      structuredContent: out.structuredContent,
+    });
+    expect(out._meta?.call_tool_result).toEqual(out._meta?.mcp_tool_result);
+  });
+
+  it("copies error envelopes onto widget _meta for ChatGPT", () => {
+    const out = withWidgetBridge(mcpNeedAuth());
+    expect(out.isError).toBe(true);
+    expect(out._meta?.mcp_tool_result).toEqual({
+      content: out.content,
+      isError: true,
+    });
+    expect(out._meta?.call_tool_result).toEqual(out._meta?.mcp_tool_result);
   });
 
   it("does not advertise a base64 fallback when the image cannot be stored", async () => {
