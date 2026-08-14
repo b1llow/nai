@@ -45,6 +45,8 @@ export const MCP_CUSTOM_DOMAIN = "nai.hoshinoaya.com";
 export const MCP_PATH = "/mcp";
 export const MCP_RESOURCE = `https://${MCP_CUSTOM_DOMAIN}${MCP_PATH}`;
 export const MCP_ISSUER = `https://${MCP_CUSTOM_DOMAIN}`;
+/** wrangler dev with a custom-domain route rewrites Host to MCP_CUSTOM_DOMAIN. */
+export const LOCAL_DEV_ORIGIN = "http://127.0.0.1:8787";
 
 /** Hostnames this Worker serves `/mcp` on. Unknown hosts stay bound to `MCP_RESOURCE`. */
 export function isAllowedMcpHostname(hostname: string): boolean {
@@ -74,15 +76,54 @@ export function mcpResourceFromRequest(request: Request): string {
   return MCP_RESOURCE;
 }
 
-/** Public image URL origin. Unknown hosts stay pinned to {@link MCP_ISSUER}. */
+function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
+}
+
+/**
+ * Public image URL origin. Unknown hosts stay pinned to {@link MCP_ISSUER}.
+ * Prefers a loopback `Host` header so `wrangler dev` (which may rewrite
+ * `request.url` to the custom domain) still emits fetchable local URLs.
+ */
 export function mcpOriginFromRequest(request: Request): string {
+  const candidates: string[] = [];
   try {
-    const url = new URL(request.url);
-    if (isAllowedMcpHostname(url.hostname)) return url.origin;
+    candidates.push(new URL(request.url).origin);
   } catch {
     /* ignore */
   }
-  return MCP_ISSUER;
+  const host = request.headers.get("Host");
+  if (host) {
+    try {
+      const proto = new URL(request.url).protocol;
+      candidates.push(new URL(`${proto}//${host}`).origin);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  let fallback: string | null = null;
+  for (const origin of candidates) {
+    try {
+      const url = new URL(origin);
+      if (!isAllowedMcpHostname(url.hostname)) continue;
+      if (isLoopbackHostname(url.hostname)) return url.origin;
+      // wrangler dev serves the custom domain over http and overwrites Host.
+      if (url.protocol === "http:" && url.hostname === MCP_CUSTOM_DOMAIN) {
+        return LOCAL_DEV_ORIGIN;
+      }
+      fallback ??= url.origin;
+    } catch {
+      /* ignore */
+    }
+  }
+  return fallback ?? MCP_ISSUER;
 }
 
 export type NaiHostKind = "text" | "image" | "api";

@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MCP_RESOURCE, mcpResourceFromRequest } from "../src/limits";
+import {
+  LOCAL_DEV_ORIGIN,
+  MCP_ISSUER,
+  MCP_RESOURCE,
+  mcpOriginFromRequest,
+  mcpResourceFromRequest,
+} from "../src/limits";
 import {
   grantedScopes,
   isInternalOAuthAccessToken,
@@ -134,6 +140,33 @@ describe("mcpResourceFromRequest", () => {
     expect(
       mcpResourceFromRequest(new Request("https://evil.example/mcp")),
     ).toBe(MCP_RESOURCE);
+  });
+});
+
+describe("mcpOriginFromRequest", () => {
+  it("uses the request origin on allowed hosts", () => {
+    expect(
+      mcpOriginFromRequest(new Request("https://nai.hoshinoaya.com/mcp")),
+    ).toBe(MCP_ISSUER);
+    expect(
+      mcpOriginFromRequest(new Request("http://127.0.0.1:8787/mcp")),
+    ).toBe("http://127.0.0.1:8787");
+    expect(
+      mcpOriginFromRequest(new Request("https://evil.example/mcp")),
+    ).toBe(MCP_ISSUER);
+  });
+
+  it("maps wrangler custom-domain http rewrites to the local listen origin", () => {
+    expect(
+      mcpOriginFromRequest(new Request("http://nai.hoshinoaya.com/mcp")),
+    ).toBe(LOCAL_DEV_ORIGIN);
+    expect(
+      mcpOriginFromRequest(
+        new Request("http://nai.hoshinoaya.com/mcp", {
+          headers: { Host: "127.0.0.1:8787" },
+        }),
+      ),
+    ).toBe(LOCAL_DEV_ORIGIN);
   });
 });
 
