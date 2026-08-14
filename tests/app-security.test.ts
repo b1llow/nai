@@ -45,6 +45,7 @@ describe("app security gates", () => {
   it("does not require auth on health", async () => {
     const res = await app.request("/health", {}, env);
     expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, revision: null });
   });
 
   it("returns 429 with Retry-After when the limiter denies", async () => {

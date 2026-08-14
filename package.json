@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "wrangler deploy --var GIT_SHA:${WORKERS_CI_COMMIT_SHA:-$(git rev-parse HEAD)}",
     "cf-typegen": "wrangler types --strict-vars false",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

@@ -18,6 +18,8 @@ type RateLimitBinding =
 
 export type Env = Omit<Cloudflare.Env, RateLimitBinding> & {
   NAI_ALLOW_UNSAFE_BASE_URL?: string;
+  /** Set at deploy by `npm run deploy` (`wrangler deploy --var GIT_SHA:<sha>`). */
+  GIT_SHA?: string;
   API_RATE_LIMIT?: RateLimit;
   OAUTH_AUTHORIZE_RATE_LIMIT?: RateLimit;
   OAUTH_REGISTER_RATE_LIMIT?: RateLimit;

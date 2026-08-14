@@ -25,7 +25,7 @@ In short: keep using the NovelAI models you pay for, without rewriting every cli
 | Method | Path | Notes |
 |--------|------|--------|
 | `GET` | `/` | Service info |
-| `GET` | `/health` | Liveness |
+| `GET` | `/health` | Liveness. JSON `{ ok, revision }` — `revision` is the deployed git SHA (null in local/dev) |
 | `POST`/`GET` | `/mcp` | Remote MCP (Streamable HTTP). OAuth or NovelAI Bearer |
 | `GET`/`POST` | `/authorize` | MCP OAuth consent (paste Persistent API token) |
 | `POST` | `/oauth/token` | OAuth token + refresh |
@@ -210,8 +210,8 @@ The dashboard Worker is already named `nai`, matching `wrangler.jsonc`. Connect 
 
 1. Open [Workers & Pages](https://dash.cloudflare.com/?to=/:account/workers-and-pages) → **nai** → **Settings** → **Builds** → **Connect**
 2. Authorize the [Cloudflare Workers & Pages GitHub App](https://github.com/apps/cloudflare-workers-and-pages) if prompted, and grant access to `b1llow/nai`
-3. Production branch: `main`. Leave the build command empty. Deploy command: `npm run deploy` (uses the Wrangler version in `package.json`)
-4. Save, then either retry a build of current `main` or push a commit. Cloudflare will `wrangler deploy` from that commit.
+3. Production branch: `main`. Leave the build command empty. Deploy command: `npm run deploy` (uses the Wrangler version in `package.json`; bakes `git rev-parse HEAD` into `GIT_SHA`)
+4. Save, then either retry a build of current `main` or push a commit. Cloudflare will `wrangler deploy` from that commit. Confirm the live Worker with `GET https://nai.hoshinoaya.com/health` — `revision` should match that commit SHA.
 
 Custom domain: `nai.hoshinoaya.com` (`wrangler.jsonc` `routes`). After a successful production build, `/v1/*` responses should include `Cache-Control: private, no-store`.
 
@@ -314,6 +314,7 @@ Chat and Responses always request `stream: true` from NovelAI. Non-stream client
 | `API_RATE_LIMIT` | no | Cloudflare Rate Limiting binding (wrangler `ratelimits`); 120 requests / 60s per client IP on `/v1/*` and `/mcp` |
 | `OAUTH_AUTHORIZE_RATE_LIMIT` | no | 30 requests / 60s per client IP on `GET`/`POST /authorize` |
 | `OAUTH_REGISTER_RATE_LIMIT` | no | 8 requests / 60s per client IP on `POST /oauth/register` |
+| `GIT_SHA` | no | Git commit injected by `npm run deploy` (`wrangler --var`). `GET /health` returns it as `revision` so you can confirm which commit is live. |
 
 Authenticated `/v1/*` and `/mcp` responses set `Cache-Control: private, no-store`. POST bodies are capped at 2 MiB on `/v1` and 20 MiB on `/mcp` (img2img); the MCP cap is enforced on the actual body, not only `Content-Length`. Chat/Responses payloads cap message count, prompt size, and `max_tokens`.
 

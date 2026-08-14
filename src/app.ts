@@ -11,6 +11,7 @@ import { handleTokenCount } from "./tokenize";
 import { parseAuthorization } from "./auth";
 import { MAX_BODY_BYTES, safeIdent } from "./limits";
 import { enforceIpRateLimit } from "./ratelimit";
+import { healthPayload } from "./revision";
 
 const app = new Hono<AppEnv>();
 
@@ -97,7 +98,10 @@ app.get("/", (c) =>
   }),
 );
 
-app.get("/health", (c) => c.json({ ok: true }));
+app.get("/health", (c) => {
+  c.header("Cache-Control", "no-store");
+  return c.json(healthPayload(c.env));
+});
 
 app.get("/v1/models", listModels);
 app.get("/v1/models/:id", getModel);
