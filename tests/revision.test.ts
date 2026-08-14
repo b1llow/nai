@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BAKED_REVISION } from "../src/baked-revision";
 import { healthPayload, parseRevision, workerRevision } from "../src/revision";
 
 describe("parseRevision", () => {
@@ -18,8 +19,11 @@ describe("parseRevision", () => {
 });
 
 describe("healthPayload", () => {
-  it("returns a null revision when wrangler did not --define one", () => {
-    expect(workerRevision()).toBeNull();
-    expect(healthPayload()).toEqual({ ok: true, revision: null });
+  it("returns the stamped module revision, or null when that file is empty", () => {
+    expect(workerRevision()).toBe(parseRevision(BAKED_REVISION));
+    expect(healthPayload()).toEqual({
+      ok: true,
+      revision: parseRevision(BAKED_REVISION),
+    });
   });
 });

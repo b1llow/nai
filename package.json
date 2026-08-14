@@ -5,6 +5,8 @@
   "license": "GPL-3.0-only",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/stamp-revision.mjs",
+    "predev": "node scripts/stamp-revision.mjs",
     "dev": "wrangler dev",
     "deploy": "node scripts/deploy.mjs",
     "cf-typegen": "wrangler types --strict-vars false",

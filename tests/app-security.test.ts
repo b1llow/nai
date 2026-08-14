@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { BAKED_REVISION } from "../src/baked-revision";
 import { MAX_BODY_BYTES } from "../src/limits";
+import { parseRevision } from "../src/revision";
 import app from "../src/app";
 
 const env = { NAI_BASE_URL: "https://text.novelai.net" };
@@ -45,7 +47,10 @@ describe("app security gates", () => {
   it("does not require auth on health", async () => {
     const res = await app.request("/health", {}, env);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, revision: null });
+    expect(await res.json()).toEqual({
+      ok: true,
+      revision: parseRevision(BAKED_REVISION),
+    });
   });
 
   it("returns 429 with Retry-After when the limiter denies", async () => {

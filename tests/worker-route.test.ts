@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { BAKED_REVISION } from "../src/baked-revision";
+import { parseRevision } from "../src/revision";
 import worker from "../src/index";
 import { testEnv, testExecutionContext } from "./helpers";
 
@@ -14,7 +16,10 @@ describe("worker fetch routing", () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
-    expect(await res.json()).toEqual({ ok: true, revision: null });
+    expect(await res.json()).toEqual({
+      ok: true,
+      revision: parseRevision(BAKED_REVISION),
+    });
   });
 
   it("lists /mcp on the root info document", async () => {
