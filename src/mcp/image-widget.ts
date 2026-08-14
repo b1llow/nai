@@ -1,0 +1,139 @@
+import type { McpServer } from "@modelcontextprotocol/server";
+
+export const IMAGE_WIDGET_URI = "ui://novelai/image-preview-v1.html";
+export const IMAGE_WIDGET_MIME_TYPE = "text/html;profile=mcp-app";
+
+export function imageWidgetToolMeta(
+  invoking: string,
+  invoked: string,
+): Record<string, unknown> {
+  return {
+    ui: { resourceUri: IMAGE_WIDGET_URI },
+    "openai/outputTemplate": IMAGE_WIDGET_URI,
+    "openai/toolInvocation/invoking": invoking,
+    "openai/toolInvocation/invoked": invoked,
+  };
+}
+
+export function registerImageWidget(server: McpServer): void {
+  server.registerResource(
+    "image-preview-widget",
+    IMAGE_WIDGET_URI,
+    {
+      title: "NovelAI image preview",
+      description: "Inline preview for images returned by NovelAI tools",
+      mimeType: IMAGE_WIDGET_MIME_TYPE,
+    },
+    async () => ({
+      contents: [
+        {
+          uri: IMAGE_WIDGET_URI,
+          mimeType: IMAGE_WIDGET_MIME_TYPE,
+          text: IMAGE_WIDGET_HTML,
+          _meta: {
+            ui: {
+              prefersBorder: true,
+              csp: {
+                connectDomains: [],
+                resourceDomains: [],
+              },
+            },
+          },
+        },
+      ],
+    }),
+  );
+}
+
+export const IMAGE_WIDGET_HTML = String.raw`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; background: transparent; }
+      #app { display: grid; gap: 10px; padding: 10px; }
+      #status { margin: 0; color: color-mix(in srgb, currentColor 68%, transparent); font-size: 13px; }
+      #gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; }
+      figure { margin: 0; overflow: hidden; border-radius: 12px; background: color-mix(in srgb, currentColor 6%, transparent); }
+      img { display: block; width: 100%; max-height: min(72vh, 760px); object-fit: contain; }
+      figcaption { padding: 8px 10px; font-size: 12px; color: color-mix(in srgb, currentColor 72%, transparent); }
+    </style>
+  </head>
+  <body>
+    <main id="app" aria-live="polite">
+      <p id="status">Preparing image preview…</p>
+      <section id="gallery" aria-label="NovelAI generated images"></section>
+    </main>
+    <script>
+      (() => {
+        const status = document.getElementById("status");
+        const gallery = document.getElementById("gallery");
+        const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+        function unwrapResult(value) {
+          if (!value || typeof value !== "object") return null;
+          if (Array.isArray(value.content)) return value;
+          if (value.result && typeof value.result === "object") return unwrapResult(value.result);
+          return null;
+        }
+
+        function imageBlocks(result) {
+          if (!result || !Array.isArray(result.content)) return [];
+          return result.content.filter((block) => {
+            if (!block || block.type !== "image" || typeof block.data !== "string") return false;
+            const mime = typeof block.mimeType === "string" ? block.mimeType : "";
+            return allowedMimeTypes.has(mime) && block.data.length > 0;
+          });
+        }
+
+        function summary(result) {
+          const data = result && result.structuredContent;
+          if (!data || typeof data !== "object") return "NovelAI image";
+          const parts = [];
+          if (typeof data.model === "string") parts.push(data.model);
+          if (Number.isFinite(data.seed)) parts.push("seed " + String(data.seed));
+          if (Number.isFinite(data.width) && Number.isFinite(data.height)) {
+            parts.push(String(data.width) + " × " + String(data.height));
+          }
+          return parts.length ? parts.join(" · ") : "NovelAI image";
+        }
+
+        function render(value) {
+          const result = unwrapResult(value);
+          const blocks = imageBlocks(result);
+          gallery.replaceChildren();
+
+          if (!blocks.length) {
+            status.textContent = "The image was generated, but this host did not expose its image block to the preview.";
+            return;
+          }
+
+          status.textContent = blocks.length === 1 ? summary(result) : summary(result) + " · " + blocks.length + " images";
+          blocks.forEach((block, index) => {
+            const figure = document.createElement("figure");
+            const image = document.createElement("img");
+            const caption = document.createElement("figcaption");
+            image.alt = blocks.length === 1 ? "NovelAI generated image" : "NovelAI generated image " + String(index + 1);
+            image.src = "data:" + block.mimeType + ";base64," + block.data;
+            caption.textContent = blocks.length === 1 ? "Generated image" : "Image " + String(index + 1);
+            figure.append(image, caption);
+            gallery.append(figure);
+          });
+        }
+
+        window.addEventListener("message", (event) => {
+          if (event.source !== window.parent) return;
+          const message = event.data;
+          if (!message || message.jsonrpc !== "2.0") return;
+          if (message.method === "ui/notifications/tool-result") render(message.params);
+        }, { passive: true });
+
+        const compat = window.openai && window.openai.toolResponseMetadata;
+        const initial = compat && (compat.mcp_tool_result || compat.call_tool_result);
+        if (initial) render(initial);
+      })();
+    </script>
+  </body>
+</html>`;

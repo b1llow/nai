@@ -43,6 +43,7 @@ import {
   resolveImageRef,
   vibeIeKey,
 } from "./artifacts";
+import { imageWidgetToolMeta, registerImageWidget } from "./image-widget";
 import { mcpJson, mcpText, runTool, withImages } from "./result";
 
 const pixelDim = z
@@ -197,6 +198,8 @@ export function registerNaiTools(
   env: Env,
   auth: string | null,
 ): void {
+  registerImageWidget(server);
+
   server.registerTool(
     "nai_generate_image",
     {
@@ -205,6 +208,7 @@ export function registerNaiTools(
         "NovelAI Diffusion image generation (txt2img, img2img, inpaint). Default model is nai-diffusion-4-5-full. Size: pass resolution as a preset name such as normal_portrait, or numeric width+height; never 1024x1024 or portrait. V4+ character prompts, vibe transfer (PNG refs are auto-encoded via /ai/encode-vibe, costing Anlas), and director references are supported. Returns PNG ImageContent plus image_id — pass that image_id to nai_upscale, nai_director, nai_encode_vibe, nai_get_image, or img2img. Do not pass filenames such as image_0.png, and do not echo PNG base64 back.",
       inputSchema: naiGenerateImageInputSchema,
       outputSchema: imageMetaOutputSchema,
+      _meta: imageWidgetToolMeta("Generating image…", "Image ready"),
     },
     async (args) =>
       runTool(auth, async (token) => {
@@ -238,6 +242,7 @@ export function registerNaiTools(
         height: z.number().int().optional(),
       }),
       outputSchema: upscaleOutputSchema,
+      _meta: imageWidgetToolMeta("Upscaling image…", "Upscaled image ready"),
     },
     async (args) =>
       runTool(auth, async (token) => {
@@ -274,6 +279,7 @@ export function registerNaiTools(
         emotion_level: z.number().int().min(0).max(5).optional(),
       }),
       outputSchema: directorOutputSchema,
+      _meta: imageWidgetToolMeta("Editing image…", "Edited image ready"),
     },
     async (args) =>
       runTool(auth, async (token) => {
@@ -381,6 +387,7 @@ export function registerNaiTools(
           .describe("image_id or nai://image/img_... URI from a previous image tool"),
       }),
       outputSchema: getImageOutputSchema,
+      _meta: imageWidgetToolMeta("Loading image…", "Image loaded"),
     },
     async (args) =>
       runTool(auth, async (token) => {

@@ -105,13 +105,15 @@ That compatibility path is token passthrough, not the MCP OAuth profile. Prefer 
 | `nai_subscription` | `image.novelai.net` `/user/subscription` |
 | `nai_list_models` | default text (OA `/oa/v1/models`); `kind=image` static catalog |
 
-Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, and `nai://image/{image_id}` (generated PNGs; not listed).
+Resources: `nai://catalog/image-models`, `nai://catalog/resolutions`, `nai://catalog/samplers`, `nai://catalog/uc-presets`, `nai://image/{image_id}` (generated PNGs; not listed), and `ui://novelai/image-preview-v1.html` (MCP App / ChatGPT output template for inline image preview).
 
 Prompts: `txt2img_v45`, `multi_character`, `story_continue`.
 
 Image tools return MCP `image` content (PNG) for the current client UI **and** an `image_id` / `nai://image/...` handle for later tool calls. Pass that `image_id` to `nai_upscale`, `nai_director`, `nai_encode_vibe`, `nai_get_image`, or img2img — not a filename such as `image_0.png`, and not the PNG base64. Artifacts are stored in Workers KV for 24 hours, scoped to the NovelAI token. KV is eventually consistent across PoPs; if an `image_id` miss happens, retry, regenerate, or pass PNG base64.
 
 V4 vibe PNGs are encoded through `/ai/encode-vibe` (2 Anlas per unique encode) unless you pass a `vibe_id` or `encoded=true`. Identical PNG+model+`information_extracted` encodes are cached. Default image model is `nai-diffusion-4-5-full`. `n_samples` is capped at 4.
+
+`nai_generate_image`, `nai_upscale`, `nai_director`, and `nai_get_image` advertise `_meta.ui.resourceUri` and `openai/outputTemplate` pointing at that widget. Hosts that implement MCP Apps (or ChatGPT Apps) can render the PNG `ImageContent` inline. The widget only reads image blocks from the tool result; it does not fetch remote URLs.
 
 Tool `ImageContent` can appear in the host's tool-result UI. That is a different channel from the final assistant message; this server cannot promote a tool image into the chat bubble. There is no public HTTPS image CDN.
 
