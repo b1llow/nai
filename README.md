@@ -64,28 +64,15 @@ Create a persistent token in the NovelAI account settings. Do not send email/pas
 
 ### Grok (grok.com Custom Connector)
 
-Grok does not perform dynamic client registration — its Custom Connector form asks for a pre-issued Client ID. Mint a public PKCE client once against this Worker's DCR endpoint:
+Grok does not perform dynamic client registration — its Custom Connector form asks for a pre-issued Client ID. This Worker writes a public PKCE client (`grok-connector`) into `OAUTH_KV` without the 90-day DCR TTL, so the same ID stays valid. Do not mint a Grok client via `POST /oauth/register`: those records expire and saved connectors then fail with an unknown client.
 
-```bash
-curl -sS https://nai.hoshinoaya.com/oauth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "client_name": "grok-connector",
-    "redirect_uris": ["https://grok.com/connectors-oauth-exchange-code/"],
-    "grant_types": ["authorization_code", "refresh_token"],
-    "response_types": ["code"],
-    "token_endpoint_auth_method": "none",
-    "scope": "mcp offline_access"
-  }'
-```
-
-Then at [grok.com/connectors](https://grok.com/connectors) → New Connector → Custom:
+At [grok.com/connectors](https://grok.com/connectors) → New Connector → Custom:
 
 1. Server URL: `https://nai.hoshinoaya.com/mcp` (the MCP endpoint, **not** `/authorize`).
-2. When Grok shows **OAuth Credentials Required**: Client ID = the `client_id` from the register response, Client Secret = leave blank, PKCE = S256.
+2. When Grok shows **OAuth Credentials Required**: Client ID = `grok-connector`, Client Secret = leave blank, PKCE = S256.
 3. Complete sign-in on `/authorize` by pasting a NovelAI Persistent API token.
 
-The `client_id` is a public identifier (no secret; every user authorizes it separately), so one registration can be reused across Grok users of this server.
+The `client_id` is a public identifier (no secret; every user authorizes it separately).
 
 ### Cursor / Claude Desktop
 

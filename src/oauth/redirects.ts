@@ -8,9 +8,9 @@ import type {
  * CIMD clients are still fetched by URL; this blocks random DCR phishing
  * clients and unknown authorize redirects.
  *
- * Grok does not perform DCR itself: register a public PKCE client once via
- * POST /oauth/register with the grok.com callback, then paste that client_id
- * into Grok's Custom Connector form (see README).
+ * Grok does not perform DCR itself: paste the pre-registered public client
+ * `grok-connector` (see `ensurePersistentGrokClient`) into Grok's Custom
+ * Connector form. DCR Grok clients still expire after 90 days.
  */
 export function isAllowedOAuthRedirect(raw: string): boolean {
   let url: URL;
